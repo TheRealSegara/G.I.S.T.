@@ -1,6 +1,19 @@
 import React, { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { Sparkles, RotateCcw, ArrowRight, GraduationCap, ChevronLeft, Trophy, Footprints, Play, Wrench } from "lucide-react";
+import {
+  SESSION_WORD_COUNT,
+  COMPANION_PERSONAS,
+  STAGE1_CYCLE,
+  STAGE2_CYCLE,
+  STAGE3_CYCLE,
+  buildCoachSystemPrompt,
+  TRANSFER_TEST_SYSTEM_PROMPT,
+  COMPREHENSION_SYSTEM_PROMPT,
+  SINGLE_WORD_REGEN_PROMPT,
+  LEVEL_MAKER_SYSTEM_PROMPT,
+  DIAGNOSTIC_SYSTEM_PROMPT,
+} from "../shared/prompts.js";
 
 /* ---------------- Fonts ---------------- */
 const FontImport = () => (
@@ -395,6 +408,8 @@ const BUILT_IN_MAP_THEME_NAMES = {
   "The Kampung Festival": "gold",
   "Pet Show Day": "rust",
   "The Robot Show": "teal",
+  "The Night Market": "brick",
+  "The Kite Festival": "amber",
 };
 
 function getMapTheme(idOrTitle) {
@@ -403,12 +418,12 @@ function getMapTheme(idOrTitle) {
   return MAP_THEMES[hashString(idOrTitle) % MAP_THEMES.length];
 }
 
-// Fixed at 5 (not adjustable) — the original intended session length,
-// trimmed to 3 while running on Gemini's tight free-tier daily quota.
-// Restored now that Groq's free tier has far more headroom. Applies both
-// to how many target words a student session covers and how many words a
-// teacher's custom map generates.
-const SESSION_WORD_COUNT = 5;
+// SESSION_WORD_COUNT is imported from ../shared/prompts.js (fixed at 5,
+// not adjustable — the original intended session length, trimmed to 3
+// while running on Gemini's tight free-tier daily quota, restored now
+// that Groq's free tier has far more headroom). Applies both to how many
+// target words a student session covers and how many words a teacher's
+// custom map generates.
 
 // AI calls only retry on a malformed/unparseable response, not on
 // network or auth/quota failures (see NON_RETRYABLE_STATUSES below).
@@ -536,6 +551,34 @@ const PASSAGES = {
       { word: "tiny", clueType: "definition", concreteness: "concrete" },
     ],
   },
+  nightmarket: {
+    title: "The Night Market",
+    emoji: "🏮",
+    mission: "The pasar malam just opened! Learn these 5 words before all the good satay is gone.",
+    arrival: "You tried everything and learned every word too — what a delicious night!",
+    text: `Last Friday evening, Farah and her father visited the pasar malam near their house. The street was full of grilled chicken and sweet kuih. That warm, tasty smell in the air is called an aroma. Farah loved the aroma of the satay stall the most. The lane was busy with scooters, so her father was cautious. He was not reckless like the boys racing their bicycles nearby. Under the string lights, the fruit stalls looked dazzling, glowing like tiny jewels. One uncle was hospitable, waving every stranger over for a free taste of his cendol. By the time they walked home, Farah felt calm and content. She had nothing left to wish for.`,
+    words: [
+      { word: "aroma", clueType: "definition", concreteness: "concrete" },
+      { word: "cautious", clueType: "contrast", concreteness: "abstract" },
+      { word: "dazzling", clueType: "example", concreteness: "concrete" },
+      { word: "hospitable", clueType: "inference", concreteness: "abstract" },
+      { word: "content", clueType: "inference", concreteness: "abstract" },
+    ],
+  },
+  kitefestival: {
+    title: "The Kite Festival",
+    emoji: "🪁",
+    mission: "The wind is perfect and the kites are ready! Learn these 5 words before your kite takes flight.",
+    arrival: "Your kite soared higher than anyone else's — every word learned, every clue caught!",
+    text: `Every year, Hakim's kampung holds a kite festival by the paddy fields. Kite makers spend weeks building a wau from bamboo and colorful paper. The frame must be sturdy, strong enough to survive the wind without snapping. Hakim's uncle is a skillful kite flyer; he can make his wau dance and spin exactly where he wants. The finished kite was covered in vivid patterns, so bright that everyone could spot it from far away. Before the contest began, Hakim felt anxious, worried his string might snap in front of the whole village. But once his kite rose above the trees, steady and tall, he felt triumphant. He had won without even needing the judges to say so.`,
+    words: [
+      { word: "sturdy", clueType: "definition", concreteness: "concrete" },
+      { word: "skillful", clueType: "example", concreteness: "abstract" },
+      { word: "vivid", clueType: "inference", concreteness: "concrete" },
+      { word: "anxious", clueType: "definition", concreteness: "abstract" },
+      { word: "triumphant", clueType: "contrast", concreteness: "abstract" },
+    ],
+  },
 };
 
 const STAGE_LABELS = {
@@ -580,201 +623,20 @@ const STAGE_GRADIENTS = {
   5: "linear-gradient(135deg,#f472b6,#db2777)",
 };
 
-/* ---------------- Prompts ---------------- */
-const COMPANION_PERSONAS = {
-  orangutan: { name: "Ori", persona: "You are Ori the Orang Utan, a gentle and curious guide. You love swinging from one idea to the next. Occasionally (not every message) say \"Ooh ooh!\" when something is exciting.", description: "Gentle and curious. Loves swinging into new ideas.", color: { gradient: "linear-gradient(135deg,#fde68a,#d6a35c)", border: "#92400e", soft: "#fef3c7", text: "#78350f" } },
-  tiger: { name: "Tiger", persona: "You are Tiger, a bold, confident guide who loves cheering the student on. Occasionally (not every message) say \"Rawr!\" when praising a good answer.", description: "Bold and confident. Cheers you on loudly.", color: { gradient: "linear-gradient(135deg,#fdba74,#fb923c)", border: "#c2410c", soft: "#ffedd5", text: "#9a3412" } },
-  parrot: { name: "Polly", persona: "You are Polly the Parrot, a chatty, cheerful guide who loves repeating fun words. Occasionally (not every message) say \"Squawk!\" for emphasis.", description: "Chatty and cheerful. Always has something to say.", color: { gradient: "linear-gradient(135deg,#86efac,#4ade80)", border: "#15803d", soft: "#dcfce7", text: "#166534" } },
-  turtle: { name: "Shelly", persona: "You are Shelly the Turtle, a calm, patient guide. You often remind the student there's no rush and to take their time.", description: "Calm and patient. Never rushes you.", color: { gradient: "linear-gradient(135deg,#99f6e4,#2dd4bf)", border: "#0d9488", soft: "#ccfbf1", text: "#0f766e" } },
-  butterfly: { name: "Flutter", persona: "You are Flutter the Butterfly, a light, gentle, encouraging guide. Your phrasing is soft and airy, like fluttering from one clue to the next.", description: "Light and gentle. Floats from clue to clue.", color: { gradient: "linear-gradient(135deg,#bae6fd,#7dd3fc)", border: "#0369a1", soft: "#e0f2fe", text: "#075985" } },
-  monkey: { name: "Momo", persona: "You are Momo the Monkey, a playful, energetic guide who loves a bit of mischief and fun.", description: "Playful and energetic. Loves a bit of mischief.", color: { gradient: "linear-gradient(135deg,#fde047,#eab308)", border: "#a16207", soft: "#fef9c3", text: "#854d0e" } },
-  owl: { name: "Ollie", persona: "You are Ollie the Owl, a wise, calm guide. Occasionally (not every message) say \"Hoo\" thoughtfully before a tip.", description: "Wise and thoughtful. Gives clever tips.", color: { gradient: "linear-gradient(135deg,#d6d3d1,#a8a29e)", border: "#57534e", soft: "#f5f5f4", text: "#44403c" } },
-  gecko: { name: "Gizmo", persona: "You are Gizmo the Gecko, a quick-witted, clever guide who loves sneaky tricks and clever clues, a bit like camouflage for words.", description: "Quick and clever. A master of sneaky clues.", color: { gradient: "linear-gradient(135deg,#bef264,#a3e635)", border: "#4d7c0f", soft: "#ecfccb", text: "#3f6212" } },
-};
-
-function buildCoachSystemPrompt(companionId, stage1Type, stage2Type, stage3Type) {
-  const c = COMPANION_PERSONAS[companionId] || COMPANION_PERSONAS.parrot;
-  return `${c.persona} Help a Malaysian primary school ESL student (age 9-12) work out ONE target vocabulary word from context. Stay in character as ${c.name}, but keep teaching clear. NEVER state the dictionary definition directly.
-
-FORMAT (critical): your entire reply, including any personality flourish, lives INSIDE "message". Never write anything outside the JSON object. Reply must start with { and end with }, nothing else.
-
-LANGUAGE RULES (strict, every turn):
-- Simple, everyday words only (except the target word).
-- Every sentence (in "message" or any Stage 2-4 example) under 10 words, never more than 12. "message" is at most 2 short sentences.
-- MCQ options: 1-4 words each, never a long phrase.
-- No hard connectors ("although," "nevertheless," "consequently") — use "but," "so," "and" instead.
-
-You guide the student through up to 5 stages, adapting difficulty to performance:
-Stage 1 MCQ: pick the correct meaning as used in the passage (4 options, 1 correct, 3 plausible distractors, order randomised). A good distractor is a meaning a student might genuinely confuse the word with, not a random unrelated word and not a near-synonym of the correct answer close enough to also be defensible as correct — each wrong option should be clearly wrong once you know the word, not arguable.
-Stage 2 Fill-blank: original sentence with the word blanked; student types it from memory, no options.
-Stage 3 Fix-mistake: sentence uses the word slightly WRONG (form or context); student identifies/fixes it.
-Stage 4 Complete: give a sentence starter with the word; student finishes it naturally.
-Stage 5 Free: student writes an original correct sentence with the word, no scaffolding.
-
-Adaptive rules:
-- A brand new word always starts at Stage 1.
-- Confident correct answer: advance 1-2 stages. Correct but shaky: advance 1 stage.
-- Incorrect: stay or drop back 1 stage (never below 1), and give a hint from the passage's context. A hint must NEVER state or paraphrase the word's meaning — if it could be copy-pasted as a correct answer, it's not a hint, it's the answer. Point to WHERE to look in the passage, or ask a guiding question, without ever completing the thought for them.
-- RESOLVED = succeeds independently (at most 1 hint that stage) at Stage 4 or 5.
-- Messages: 1-3 sentences, warm and fun. Never repeat the same opening line twice in a row.
-- When RESOLVED, vary the reward line (a fun fact, a joke, or a mini-challenge to use the word again). Don't repeat the same style two words in a row.
-
-CORRECTNESS (critical, read carefully): for mcq, true_false, tap_select, word_bank, letter_connect, and reverse_clue, the app itself checks the student's answer against your own "correct_answer"/the target word, deterministically, before your next reply. If the student's message contains a bracketed note like "[FACT: this answer is CORRECT]" or "[FACT: this answer is INCORRECT]", that fact is final — never re-judge or contradict it, just react to it (feedback, hint if incorrect, stage progression). Only for "text" (Stage 2 fill-blank, Stage 3 fix-mistake, Stage 4 continue, Stage 5 free sentence) must you judge correctness yourself, since there's no fixed answer key — be generous there: accept minor spelling/grammar slips and any phrasing that correctly captures the word's meaning and use, don't fail a student over something other than the actual target skill being tested. Two concrete examples: a Stage 5 sentence with the word spelled "resiliant" but used with exactly the right meaning should PASS, that's a spelling slip, not the skill being tested; a Stage 5 sentence that's grammatically fine and mentions the general topic but never actually shows the word's meaning (e.g. just describing the passage's scene without capturing what the word itself means) should FAIL, that's the actual skill missing, not a slip. For "text" answers specifically, the student's message may also contain a bracketed note like "[FACT: the answer does not contain the target word]" — when present, trust that specific fact (the word truly wasn't used) as part of your judgment, but still use your own judgment for everything else about the answer; that combination means it can't be resolved, so coach them to actually use the word rather than just stating it's missing.
-
-Before deciding "resolved" and "hint_given" for a "text" answer, briefly reason it through in "grading_reasoning" first (see JSON shape below) — decide your reasoning, then your verdict, not the other way around.
-
-input_type per stage is fixed below, not your choice, follow exactly (mechanics defined further down):
-- Stage 1 MUST use input_type "${stage1Type}".
-- Stage 2 MUST use input_type "${stage2Type}".
-- Stage 3 MUST use input_type "${stage3Type}".
-- Stage 4 & 5 always use input_type "text". Stage 4: put the sentence beginning in "sentence_starter" (e.g. "The orang utan was very"), "message" is just a short instruction like "Finish this sentence!" (never repeat the starter inside message). Stage 5: "sentence_starter" is null, student writes the whole sentence.
-
-CRITICAL: every turn fill "display_sentence" (shown in its own reference box, separate from "message"). Default: the original passage sentence with the target word used correctly — covers Stage 1, Stage 2 (app blanks it visually, give the correct sentence), Stage 3 with "reverse_clue"/"text", and Stage 4/5. Exception: Stage 3 "tap_select" needs a sentence using the word WRONG, matching "options" exactly. Never null, never empty.
-
-Input type definitions:
-- "mcq" (Stage 1 only): message poses a question; options is exactly 4 short answer choices, one correct; correct_answer is that option's exact text. NEVER let the target word itself (or an obviously inflected form of it, like an added -s/-ed/-ing) appear as one of the 4 options, not even as a "distractor" — the whole point is testing whether they know what the word means, an option that just repeats the word tests nothing and confuses the exercise.
-- "true_false" (Stage 1 only): message poses a true-or-false statement about the word's use; options must be exactly ["True","False"]; correct_answer is exactly "True" or "False".
-- "word_bank" (Stage 2, word blanked): message asks the student to spell the missing word from context; word_tiles is the target word's letters in SHUFFLED order, EXACTLY those letters, same count, nothing added or dropped; correct_answer null (the app checks against the target word itself).
-- "letter_connect" (Stage 2, word blanked): same task as word_bank, but letters are shown in a circle and connected by tapping in order; word_tiles same shuffled format, same exact-letters rule; correct_answer null (same reason).
-- "tap_select" (Stage 3, word present but WRONG): message is just the instruction (e.g. "Fix the mistake!"); options is display_sentence split on whitespace into its individual words, punctuation stripped from each (so an option is a clean word like "resilient", never "resilient," or "resilient."), student taps the ONE wrong word, correct_answer is that exact word. Never a blank placeholder as an option, never a word that isn't actually one of display_sentence's own words.
-- "reverse_clue" (Stage 3, word present and CORRECT): message asks which part of the sentence is the clue explaining the word's meaning; options is display_sentence split on whitespace into its individual words, punctuation stripped the same way as tap_select; correct tap is the clue phrase itself; correct_answer is that exact phrase, matching one of the options exactly.
-- "text": free typing, no options/tiles, correct_answer always null (see CORRECTNESS above, you judge this type yourself). Used for Stage 2 (type the missing word), Stage 3 (type the correction), Stage 4 (continue from sentence_starter), Stage 5 (original sentence, no scaffolding).
-
-Respond with ONLY valid, compact, single-line JSON, no markdown fences, no extra commentary, no literal line breaks inside any string value, in exactly this shape:
-{
-  "message": "string shown to the student: brief feedback if any, then the next task, never the full sentence, that's display_sentence's job",
-  "display_sentence": "string, REQUIRED every turn, see rules above",
-  "input_type": "mcq" or "true_false" or "tap_select" or "word_bank" or "letter_connect" or "reverse_clue" or "text",
-  "options": ["a","b","c","d"] or null (mcq, true_false, tap_select, reverse_clue),
-  "word_tiles": ["l","e","t","t","e","r","s"] or null (word_bank, letter_connect, shuffled),
-  "correct_answer": "string or null, REQUIRED (non-null) for mcq/true_false/tap_select/reverse_clue, must exactly match one of this turn's options; null for word_bank/letter_connect/text",
-  "sentence_starter": "string or null, ONLY at Stage 4: sentence beginning up to where the student continues, don't repeat this text inside message",
-  "stage": number (the stage this new question belongs to, 1-5),
-  "grading_reasoning": "string or null, ONLY when you just judged a 'text' answer yourself: one short sentence on why it's correct/incorrect, decided BEFORE hint_given/resolved below, never shown to the student, not used for any other input_type",
-  "hint_given": boolean,
-  "resolved": boolean,
-  "fun_fact": "string or null, only when resolved is true: the varied reward line (fact, joke, or challenge)"
-}`;
-}
-
-const TRANSFER_TEST_SYSTEM_PROMPT = `A Malaysian primary school ESL student just worked out a vocabulary word inside one specific passage. Now you test whether they truly understand it, not just that specific sentence, by dropping the same word into a brand-new sentence they have never seen, about a different everyday situation, then asking what it means there.
-
-Write ONE new short sentence (under 15 words) using the target word correctly and naturally, about a different topic than the original passage. Then write an MCQ with 4 short options (1-4 words each) for what the word means in this new sentence, one correct.
-
-Respond with ONLY valid JSON, no markdown fences, no extra text, in exactly this shape:
-{
-  "sentence": "the new sentence using the word",
-  "options": ["a","b","c","d"],
-  "correctAnswer": "the exact text of the correct option"
-}`;
-
-const COMPREHENSION_SYSTEM_PROMPT = `A Malaysian primary school ESL student just finished working through 5 vocabulary words from a passage. Now check whether they actually followed the story itself, not just the individual words, with one comprehension question about the passage as a whole (a main event, a reason something happened, or what a character did), not about any single vocabulary word.
-
-Write ONE short question and an MCQ with 4 short options (1-6 words each), one correct, testing overall understanding of the passage.
-
-Respond with ONLY valid JSON, no markdown fences, no extra text, in exactly this shape:
-{
-  "question": "the comprehension question",
-  "options": ["a","b","c","d"],
-  "correctAnswer": "the exact text of the correct option"
-}`;
-
-const SINGLE_WORD_REGEN_PROMPT = `You help a teacher fix one word in a G.I.S.T. map. You are given a passage and a list of words already chosen as targets, do not repeat any of them. Pick ONE different word from the passage that is present exactly as written, meaningfully challenging but inferable for a Year 4-6 ESL learner, with a genuine context clue nearby (contrast, definition, example, or inference).
-
-Respond with ONLY valid JSON, no markdown fences, no extra text, in exactly this shape:
-{"word": "exact spelling from the passage", "clueType": "contrast", "concreteness": "abstract"}`;
-
-const LEVEL_MAKER_SYSTEM_PROMPT = (wordCount) => `You help a teacher turn their own reading passage into a G.I.S.T. map for Malaysian primary school (Year 4-6) ESL students. You are given a passage the teacher wrote or pasted themselves.
-
-Sometimes the teacher's message will end with a line starting "Required words:", listing specific words they want used as targets, in order. If that line is present, you MUST use those exact words as the first entries in your "words" array, in the order given, spelled exactly as the teacher wrote them (correct capitalization to match how the word actually appears in the passage if needed, but don't change the word itself). Only pick your own additional words to fill any remaining slots if fewer than ${wordCount} were given. If no such line is present, pick all ${wordCount} yourself.
-
-Pick exactly ${wordCount} target vocabulary words total. Each one must:
-- Be present in the passage EXACTLY as written (same spelling and form), copy it precisely, don't change tense or add/remove letters.
-- Be meaningfully challenging but inferable from context for a Year 4-6 ESL learner, not too easy, not too obscure.
-- Have a genuine context clue nearby in the passage (a contrast word like "but", a definition-like explanation, an illustrative example, or something the reader can infer from surrounding detail). Don't pick a word with no real clue around it. This still applies to teacher-required words, tag them with whatever clueType actually fits the context, even if imperfect.
-
-Across the ${wordCount} words, aim for a mix of clueType values (contrast, definition, example, inference) and a mix of concreteness values (abstract, concrete), don't make them all the same type if the passage offers variety.
-
-Also assess the passage's overall readability for a Year 4-6 Malaysian ESL learner specifically (not a native speaker), considering sentence length, vocabulary difficulty, and idea complexity:
-- "readabilityLevel": one of "too_easy", "about_right", "too_hard".
-- "readabilityNote": one short plain sentence explaining why, specific to this passage (e.g. mention actual sentence complexity or vocabulary if relevant), not generic.
-
-Also write:
-- "emoji": one single emoji that fits the passage's theme.
-- "mission": one upbeat sentence framing why the student is doing this, in an adventurous, kid-friendly voice, similar to "Help ___ by learning these ${wordCount} words before ___!"
-- "arrival": one upbeat sentence for after they finish, tying back to the mission.
-
-Respond with ONLY valid, compact JSON, no markdown fences, no extra text, in exactly this shape:
-{
-  "emoji": "single emoji",
-  "mission": "string",
-  "arrival": "string",
-  "readabilityLevel": "too_easy" or "about_right" or "too_hard",
-  "readabilityNote": "string",
-  "words": [
-    {"word": "exact spelling from the passage", "clueType": "contrast", "concreteness": "abstract"}
-  ]
-}
-The "words" array must have exactly ${wordCount} entries.`;
-
-const DIAGNOSTIC_SYSTEM_PROMPT = `You are the G.I.S.T. diagnostic engine. G.I.S.T. is purely an assessment tool, it exists to reveal what a student understands, not to be the thing they get taught with again. You read a log of a Malaysian primary school ESL student's completed vocabulary coaching session and produce five separate pieces of teacher-facing output: a one-glance summary plus the four detailed parts below it.
-
-Each log entry contains: the word, its clueType (contrast, definition, example, or inference), its concreteness (abstract or concrete), the stage the student needed to reach to resolve it (1-5, higher means they needed more support), how many hints they used, whether the word was skipped, whether they reported seeing the word before ("priorKnowledge": yes/no/not_sure), how they say they got it ("gotItVia": knew/clues/guessed), which clue phrase they identified as helping them (if any), how long they took to answer in seconds ("timeToAnswerSec"), whether that answer landed right at the fastest speed the app physically allows ("answeredAtFloor": true/false — the app already forces a short pause before an answer can be tapped, so true means they had essentially no time beyond that forced pause to actually read the options, a guess-speed click rather than a reasoned one, even if the answer was correct), and, for at most one word this session, a transfer test result (whether they could use the word correctly in a brand-new sentence, "transferPassed": true/false/null). You are also given the whole-passage comprehension check result (correct or incorrect) and the question/answer involved. You may also be given optional teacher notes about the session's context (e.g. "right after recess," "usually stronger with reading"), factor these in wherever relevant, they explain circumstances the log alone can't show, they don't override what the data actually shows.
-
-Entries are listed in chronological order, oldest first, so you can also see how the student's response time and hint use changed across the session, not just which words were hard.
-
-THE MOST IMPORTANT RULE, applies to every part: NEVER use internal category labels as if the reader already knows them. Words like "clue type," "contrast clue," "concreteness," "reliability," "transfer test," "prior knowledge" are labels for you to reason with, never words to hand the teacher. Translate every pattern into what it actually means in plain language. Instead of "struggled with contrast-clue words," write something like "when the sentence explains a word directly, they work it out easily, but when the clue is more indirect, like the word 'but' signaling a contrast, they lose the thread." Instead of "the transfer test passed," write "when we changed the sentence completely, they still got it right, real proof they understand the word itself, not just that one sentence." If you catch yourself typing one of the banned labels above into a field a teacher reads, stop and rewrite it in plain words.
-
-HARD RULES for all parts, not optional:
-- Never write generic praise or filler with no evidence behind it. Banned phrases include (but are not limited to): "did well overall," "great effort," "good job," "struggled a bit," "some words," "certain areas," "keep practicing." If you catch yourself about to write something a teacher could have guessed without seeing the log, stop and replace it with an actual data point.
-- Every claim about a pattern must name the specific word(s) it's based on, by name, not just the category. A claim without a named word attached is not allowed.
-- Wrap the specific words and key evidence in double asterisks like **careful** or **needed a lot of support**, so they can be visually emphasised. Only bold genuine evidence, not random words.
-- When describing how much support a word needed, use plain difficulty tiers, "solved independently," "needed some support," "needed a lot of support", never a bare hint count as a number, that belongs to the app's own summary table, not your prose.
-- Treat skipped words separately: name any skipped words as needing direct teacher follow-up, don't fold them into pattern analysis.
-- If the log is too short for a confident pattern (fewer than 3 non-skipped entries), say so plainly in whichever section it affects, and just report what happened with those specific words instead of generalising.
-
-FORMAT RULES for all parts, not optional, this creates real visual hierarchy instead of a wall of text:
-- Prioritize specificity over brevity. A sentence should be exactly as long as it needs to be to carry a named-word claim and its evidence, no fixed word limit — the HARD RULES above (name the words, cite the evidence, no generic filler) are what should shape a sentence's length, not an artificial cap. Don't ramble or pad, but never compress a specific point into a vague short one just to keep it brief.
-- Each field (except "summary" and storyUnderstandingNote) must be written as: ONE bolded headline sentence on its own line, then a blank line, then 2-4 bullet points, each on its own line starting with "- ". Use literal "\\n" characters in the JSON string for line breaks, never write it all as one flowing paragraph.
-- Each bullet is one specific point, one piece of evidence, but can run as long as that evidence needs.
-- storyUnderstandingNote is short enough (1-2 sentences) to stay as plain text, no bullets needed there, but the bold-evidence rule still applies.
-
-PART 0 — "summary" (1-2 plain sentences, no bullets, no bold):
-- The single takeaway a teacher needs in 5 seconds, before reading anything else. Plainer and simpler than every other field, this is the one a teacher reads even if they read nothing else.
-- State the one clearest pattern in the plainest possible words, e.g. "Ahmad understands words that are explained directly, but not words he has to work out from a hint." Name at most one word as a light example, don't pack in evidence, that's what the sections below are for.
-- No markdown, no bullets, no bold asterisks, just two short plain sentences.
-
-PART 1 — "corePattern" (headline + up to 4 bullets):
-- Headline: describe this student the way you'd describe them to another teacher, not a word-category scorecard. Fuse two things into one read: the specific word-level pattern (which kind of clue trips them up, in plain words) AND the session-level arc, did their hint use or response time get better or worse as the session went on, did skips cluster near the end (a fatigue signal, different from a difficulty signal), did they seem to engage less over time. Only claim a session-level arc if the data actually supports it (roughly 4+ non-skipped entries with real variation), otherwise stick to the word-level pattern alone.
-- Bullets: enough specific named-word evidence to justify the headline, plus one bullet naming a genuine strength held to the same evidence standard, so this reads as "here is exactly where the gap is and isn't," not a blanket verdict. Include one bullet that explains what the pattern actually means for how this student currently reads, not just more evidence for the pattern itself — e.g. "This means when a word's meaning is spelled out for them, they're confident, but when they have to infer it from a signal word like 'but' or 'however,' that's a genuinely different skill they haven't built yet, not a vocabulary gap." Do NOT predict future performance or readiness for harder material in that bullet, that's not something one session can responsibly support, stay anchored to what this session's pattern reveals about how this student currently processes context clues, nothing beyond that.
-- If the data genuinely doesn't support a single clear pattern, say so plainly as the headline instead of manufacturing one, and give fewer bullets.
-
-PART 2 — "howReliable" (headline + 2-4 bullets):
-- Headline: one plain-language verdict on how much a teacher should trust this session's correct answers overall.
-- Bullets: compare what a student claimed beforehand against what they actually did, and name any mismatch specifically in plain terms (e.g. "said they'd never seen 'exhausted' before, then said afterward they already knew it, worth a quick check with them directly"); note which correct answers are backed by real evidence versus which ones aren't (a fast guess that happened to be right isn't the same as reasoning it out) — if any entries have "answeredAtFloor": true, name those word(s) specifically and note the answer came at guess speed with no real time to read the options, so it's weaker evidence of understanding than the stage/hint count alone would suggest, without implying anything dishonest, it's simply too fast to have been a reasoned read; if a sentence-swap check ran this session, describe its result as the strongest single piece of evidence available, in plain words, not as a named test.
-
-PART 3 — "storyUnderstandingNote" (1-2 sentences, plain text):
-- Given the comprehension check result, write a short line connecting it back to the vocabulary work, made clear that this tests following the actual story, not just knowing individual words.
-
-PART 4 — "whatToTry" (headline + 2-3 bullets):
-- Headline: the one real classroom teaching action for the teacher's next actual lesson, completely independent of G.I.S.T. or any app. Never mention the game, an app stage, or an interaction type, G.I.S.T. only assesses, it doesn't reteach.
-- Bullets: why this action, referencing the specific word(s) and the plain-language pattern from Part 1, not generic ("give more vocabulary practice" is not acceptable); end the final bullet with one short, ready-to-use line the teacher could say out loud to the student right now, in quotation marks.
-
-Respond with ONLY valid JSON, no markdown fences, no extra text, in exactly this shape:
-{
-  "summary": "string",
-  "corePattern": "string",
-  "howReliable": "string",
-  "storyUnderstandingNote": "string",
-  "whatToTry": "string"
-}`;
+// COMPANION_PERSONAS, buildCoachSystemPrompt, TRANSFER_TEST_SYSTEM_PROMPT,
+// COMPREHENSION_SYSTEM_PROMPT, SINGLE_WORD_REGEN_PROMPT,
+// LEVEL_MAKER_SYSTEM_PROMPT, and DIAGNOSTIC_SYSTEM_PROMPT are imported
+// from ../shared/prompts.js — the same module api/_claudeHandler.js
+// imports, so the server (which now owns actually building these prompts,
+// see that file) and this bundle's "Build Your Own G.I.S.T." blueprint
+// display below can never drift apart.
 
 // The "Build Your Own G.I.S.T." blueprint handed to a teacher's AI
 // assistant (see BuildYourOwnScreen). Deliberately built as a template
-// literal that interpolates the app's real, live prompt constants above
-// rather than a second, hand-copied wall of text — this can't silently
-// drift out of date if a prompt is ever tuned again, since it's reading
-// the same constants callClaude() actually sends.
+// literal that interpolates the app's real, live prompt constants
+// imported above rather than a second, hand-copied wall of text — this
+// can't silently drift out of date if a prompt is ever tuned again, since
+// it's reading the same constants the server actually uses.
 const BUILD_YOUR_OWN_PROMPT = `You're going to help me adapt an existing AI teaching tool called G.I.S.T. (Guided Inference Skill Trainer) for my own class. Below is its complete design: what it does, how it's built, the exact prompts it sends to its AI, and the reasoning behind its trickier design decisions. Please read all of it, then help me build my own adapted version — ask me what I'd like to change before you start.
 
 === WHAT G.I.S.T. IS ===
@@ -961,7 +823,15 @@ function useQuotaStatus() {
 }
 
 /* ---------------- API helper ---------------- */
-async function callClaude(systemPrompt, messages, maxTokens = 1000) {
+// promptId + params (rather than a built system-prompt string) is what
+// actually goes over the wire — the server owns building the real prompt
+// from these (see api/_claudeHandler.js's PROMPT_BUILDERS), so there's no
+// way for anything calling this endpoint directly (bypassing this app
+// entirely) to smuggle arbitrary instruction text into what gets sent to
+// the AI provider under this app's key and quota. `params` is null for
+// every prompt except "coach", which needs { companionId, stage1Type,
+// stage2Type, stage3Type }.
+async function callClaude(promptId, params, messages, maxTokens = 1000) {
   const response = await fetch("/api/claude", {
     method: "POST",
     headers: {
@@ -971,7 +841,8 @@ async function callClaude(systemPrompt, messages, maxTokens = 1000) {
     body: JSON.stringify({
       model: "claude-sonnet-4-6",
       max_tokens: maxTokens,
-      system: systemPrompt,
+      promptId,
+      ...(params ? { params } : {}),
       messages,
     }),
   });
@@ -1273,12 +1144,12 @@ function validateCoachResponse(parsed, targetWordText) {
   return true;
 }
 
-async function callClaudeWithRetry(systemPrompt, messages, attempts = MAX_RETRY_ATTEMPTS, validate = null, maxTokens = 1000) {
+async function callClaudeWithRetry(promptId, params, messages, attempts = MAX_RETRY_ATTEMPTS, validate = null, maxTokens = 1000) {
   let lastError = null;
   for (let i = 0; i < attempts; i++) {
     let wasRetryable429 = false;
     try {
-      const raw = await callClaude(systemPrompt, messages, maxTokens);
+      const raw = await callClaude(promptId, params, messages, maxTokens);
       const parsed = safeParseJSON(raw);
       if (parsed && (!validate || validate(parsed))) return parsed;
       lastError = new Error(parsed ? "Response didn't match the expected shape" : "Response wasn't valid JSON");
@@ -1474,7 +1345,8 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, onViewDemoR
       : makerText.trim();
     try {
       const parsed = await callClaudeWithRetry(
-        LEVEL_MAKER_SYSTEM_PROMPT(SESSION_WORD_COUNT),
+        "level_maker",
+        null,
         [{ role: "user", content: userContent }],
         MAX_RETRY_ATTEMPTS,
         (p) => p && Array.isArray(p.words) && p.words.length === SESSION_WORD_COUNT
@@ -1503,7 +1375,7 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, onViewDemoR
     setRegeneratingIndex(index);
     const otherWords = makerResult.words.filter((_, i) => i !== index).map((w) => w.word);
     try {
-      const raw = await callClaude(SINGLE_WORD_REGEN_PROMPT, [
+      const raw = await callClaude("single_word_regen", null, [
         { role: "user", content: `Passage: "${makerText.trim()}"\n\nAlready chosen words (don't repeat these): ${otherWords.join(", ")}` },
       ]);
       const parsed = safeParseJSON(raw);
@@ -3204,9 +3076,7 @@ function LetterConnectWidget({ tiles, onSubmit, disabled = false }) {
 }
 
 
-const STAGE1_CYCLE = ["mcq", "true_false"];
-const STAGE2_CYCLE = ["word_bank", "text", "letter_connect"]; // word is absent (blank) here, nothing to tap
-const STAGE3_CYCLE = ["tap_select", "text", "reverse_clue"]; // a wrong word is present here, tappable, or clue-recognition
+// STAGE1_CYCLE/STAGE2_CYCLE/STAGE3_CYCLE are imported from ../shared/prompts.js.
 
 // Quiet "coach is typing" cue: replaces the old static "is thinking… 🤔"
 // text. Used both while waiting on the AI response and, briefly, as the
@@ -3462,7 +3332,7 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onBack
     const openingMsg = `Passage: "${passage.text}"\n\nStart coaching for the target word "${targetWord.word}". Begin at Stage 1.`;
     const msgs = [{ role: "user", content: openingMsg }];
     try {
-      const parsed = await callClaudeWithRetry(buildCoachSystemPrompt(avatarConfig.companion, stage1Type, stage2Type, stage3Type), msgs, MAX_RETRY_ATTEMPTS, (p) => validateCoachResponse(p, targetWord.word));
+      const parsed = await callClaudeWithRetry("coach", { companionId: avatarConfig.companion, stage1Type, stage2Type, stage3Type }, msgs, MAX_RETRY_ATTEMPTS, (p) => validateCoachResponse(p, targetWord.word));
       setHistory([...msgs, { role: "assistant", content: JSON.stringify(parsed) }]);
       setCurrent(parsed);
       setStageReached(parsed.stage || 1);
@@ -3536,7 +3406,7 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onBack
     }
     const newHistory = [...history, { role: "user", content: answerText + factNote }];
     try {
-      const parsed = await callClaudeWithRetry(buildCoachSystemPrompt(avatarConfig.companion, stage1Type, stage2Type, stage3Type), newHistory, MAX_RETRY_ATTEMPTS, (p) => validateCoachResponse(p, targetWord.word));
+      const parsed = await callClaudeWithRetry("coach", { companionId: avatarConfig.companion, stage1Type, stage2Type, stage3Type }, newHistory, MAX_RETRY_ATTEMPTS, (p) => validateCoachResponse(p, targetWord.word));
       const updatedHistory = [...newHistory, { role: "assistant", content: JSON.stringify(parsed) }];
       setHistory(updatedHistory);
       if (parsed.hint_given) hintsUsedRef.current += 1;
@@ -3611,7 +3481,7 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onBack
   async function runTransferTest(gotItViaValue, clueValue) {
     setTransferLoading(true);
     try {
-      const raw = await callClaude(TRANSFER_TEST_SYSTEM_PROMPT, [
+      const raw = await callClaude("transfer_test", null, [
         { role: "user", content: `Original passage: "${passage.text}"\n\nTarget word: "${targetWord.word}"` },
       ]);
       const parsed = safeParseJSON(raw);
@@ -4368,7 +4238,8 @@ function ComprehensionScreen({ passage, avatarConfig, onDone, bilingual }) {
       setLoading(true);
       try {
         const parsed = await callClaudeWithRetry(
-          COMPREHENSION_SYSTEM_PROMPT,
+          "comprehension",
+          null,
           [{ role: "user", content: `Passage: "${passage.text}"` }],
           MAX_RETRY_ATTEMPTS,
           (p) => p && p.question && Array.isArray(p.options)
@@ -5082,7 +4953,7 @@ function TeacherScreen({ studentId, log, onBack, onReset, sessionStartedAt, comp
       // server enforces its own matching cap for this prompt regardless
       // of what's requested here (see DIAGNOSTIC_MAX_TOKENS_CAP in
       // api/_claudeHandler.js).
-      const parsed = await callClaudeWithRetry(DIAGNOSTIC_SYSTEM_PROMPT, [userMsg], MAX_RETRY_ATTEMPTS, (p) => p && p.corePattern, 1800);
+      const parsed = await callClaudeWithRetry("diagnostic", null, [userMsg], MAX_RETRY_ATTEMPTS, (p) => p && p.corePattern, 1800);
       const nextSummary = {
         summary: parsed.summary || "",
         corePattern: parsed.corePattern,
@@ -5437,6 +5308,7 @@ function BuildYourOwnScreen({ onBack }) {
               onClick={handleCopy}
               className="font-display font-700 text-sm text-teal-700 hover:text-teal-900 bg-white rounded-full px-4 py-2 border-2 mt-1"
               style={{ borderColor: "#0d9488" }}
+              aria-live="polite"
             >
               {copied ? "✅ Copied!" : "📋 Copy prompt"}
             </button>
@@ -5465,17 +5337,17 @@ function BuildYourOwnScreen({ onBack }) {
 
           <Section icon="🧠" title="Somewhere to run the AI">
             <p>This is what lets the app talk to an AI. Groq gives out a free API key for this — free, no credit card needed.</p>
-            <p><a href="https://console.groq.com" target="_blank" rel="noopener noreferrer" className="text-teal-700 underline font-700">console.groq.com</a></p>
+            <p><a href="https://console.groq.com" target="_blank" rel="noopener noreferrer" className="text-teal-700 underline font-700">console.groq.com<span className="sr-only"> (opens in a new tab)</span></a></p>
           </Section>
 
           <Section icon="🗄️" title="Somewhere to save student progress">
             <p>This is where student accounts and their session history actually live. Supabase gives out a free database for this — free, no credit card needed.</p>
-            <p><a href="https://supabase.com" target="_blank" rel="noopener noreferrer" className="text-teal-700 underline font-700">supabase.com</a></p>
+            <p><a href="https://supabase.com" target="_blank" rel="noopener noreferrer" className="text-teal-700 underline font-700">supabase.com<span className="sr-only"> (opens in a new tab)</span></a></p>
           </Section>
 
           <Section icon="🌐" title="Somewhere to host the website">
             <p>This puts the finished website online with a real link you can share with your school. Vercel hosts it for free — free, no credit card needed.</p>
-            <p><a href="https://vercel.com" target="_blank" rel="noopener noreferrer" className="text-teal-700 underline font-700">vercel.com</a></p>
+            <p><a href="https://vercel.com" target="_blank" rel="noopener noreferrer" className="text-teal-700 underline font-700">vercel.com<span className="sr-only"> (opens in a new tab)</span></a></p>
           </Section>
 
           <Section icon="🔒" title="Keep this part safe">

@@ -209,14 +209,18 @@ const WHAT_TO_TRY_STRONG_TEMPLATES = [
 ];
 
 /* ---------------- /api/claude mock ---------------- */
-function mockClaude(system, messages) {
+// promptId is the same field the real /api/claude endpoint dispatches on
+// (see api/_claudeHandler.js's PROMPT_BUILDERS) -- matching on it directly
+// here, instead of sniffing prompt text, is both simpler and immune to the
+// prompt-text-matching bugs the real endpoint used to have to worry about.
+function mockClaude(promptId, messages) {
   const allMsgs = (messages || []).map(function (m) { return m.content; }).join("\n");
   const lastMsg = (messages && messages[messages.length - 1] && messages[messages.length - 1].content) || "";
 
   // Diagnostic engine — reads the REAL log the client sends, so the
   // underlying claims are a genuine (if simple) analysis of real data;
   // only the wrapping sentences are varied.
-  if (system.indexOf("You are the G.I.S.T. diagnostic engine") === 0) {
+  if (promptId === "diagnostic") {
     const logMatch = /Log \(chronological, oldest first\):\n(\[[\s\S]*?\])\n\nWhole-passage/.exec(allMsgs);
     let log = [];
     try { log = logMatch ? JSON.parse(logMatch[1]) : []; } catch (e) { log = []; }
@@ -252,7 +256,7 @@ function mockClaude(system, messages) {
   // the literal word is always present; if it has no curated entry, borrow
   // another word's meaning/distractor shape (self-consistent MCQ, just not
   // a real definition) rather than fail this rare, low-stakes check.
-  if (system.indexOf("A Malaysian primary school ESL student just worked out a vocabulary word") === 0) {
+  if (promptId === "transfer_test") {
     const word = findLiteralWord(allMsgs) || KNOWN_WORDS[Math.floor(Math.random() * KNOWN_WORDS.length)];
     const w = WORDS[word] || WORDS[KNOWN_WORDS[Math.floor(Math.random() * KNOWN_WORDS.length)]];
     const distractors = pickDistinct(w.distractors, 3, null);
@@ -265,7 +269,7 @@ function mockClaude(system, messages) {
   }
 
   // Comprehension check
-  if (system.indexOf("A Malaysian primary school ESL student just finished working through 5 vocabulary words") === 0) {
+  if (promptId === "comprehension") {
     let found = null;
     for (let ci = 0; ci < COMPREHENSION_BY_PASSAGE.length; ci++) {
       if (allMsgs.indexOf(COMPREHENSION_BY_PASSAGE[ci].match) !== -1) { found = COMPREHENSION_BY_PASSAGE[ci]; break; }
@@ -276,7 +280,7 @@ function mockClaude(system, messages) {
 
   // Single-word regen (Level Maker "swap this word") -- same "must actually
   // be in the passage" requirement as the Level Maker itself.
-  if (system.indexOf("You help a teacher fix one word in a G.I.S.T. map") === 0) {
+  if (promptId === "single_word_regen") {
     const passageText = extractPassageText(allMsgs) || allMsgs;
     const alreadyChosenMatch = /Already chosen words \(don't repeat these\): (.*)/.exec(allMsgs);
     const alreadyChosen = {};
@@ -290,7 +294,7 @@ function mockClaude(system, messages) {
   // Level Maker — picks words that actually appear in the pasted passage,
   // preferring the curated dictionary (now 50 words, up from 20) so more
   // custom passages get real MCQ content instead of the generic fallback.
-  if (system.indexOf("You help a teacher turn their own reading passage") === 0) {
+  if (promptId === "level_maker") {
     const passageText = extractPassageText(allMsgs) || allMsgs;
     const realWords = extractRealWords(passageText);
     const realWordSet = {};
@@ -314,7 +318,7 @@ function mockClaude(system, messages) {
   // Coach — the core loop. Uses the "[FACT: this answer is ...]" tag the
   // real frontend already includes in the student's message to know the
   // verdict without needing any real language understanding.
-  if (system.indexOf("Help a Malaysian primary school ESL student (age 9-12) work out ONE target vocabulary word") !== -1) {
+  if (promptId === "coach") {
     const word = findLiteralWord(allMsgs) || KNOWN_WORDS[Math.floor(Math.random() * KNOWN_WORDS.length)];
     const w = WORDS[word];
     const isFirstTurn = messages.length <= 1;

@@ -1,6 +1,6 @@
 {
   "name": "gist-guided-inference-skill-trainer",
-  "version": "2.4.0",
+  "version": "2.5.0",
   "private": true,
   "description": "G.I.S.T. (Guided Inference Skill Trainer) — an AI-powered vocabulary and reading comprehension assessment tool for Malaysian primary school ESL students.",
   "type": "module",
@@ -16,7 +16,7 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.3",
-    "@vercel/functions": "^3.9.1",
+    "@vercel/functions": "^3.9.5",
     "express": "^4.19.2",
     "lucide-react": "^0.383.0",
     "react": "^18.2.0",

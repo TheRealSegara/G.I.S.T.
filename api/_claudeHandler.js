@@ -14,12 +14,29 @@
 
 import { verifyToken } from "./_auth.js";
 import { isOriginAllowed, getClientIp, pruneIfLarge, isPlainObjectWithOnlyKeys, DAILY_QUOTA_PER_CODE } from "./_shared.js";
+import {
+  SESSION_WORD_COUNT,
+  COMPANION_PERSONAS,
+  STAGE1_CYCLE,
+  STAGE2_CYCLE,
+  STAGE3_CYCLE,
+  buildCoachSystemPrompt,
+  TRANSFER_TEST_SYSTEM_PROMPT,
+  COMPREHENSION_SYSTEM_PROMPT,
+  SINGLE_WORD_REGEN_PROMPT,
+  LEVEL_MAKER_SYSTEM_PROMPT,
+  DIAGNOSTIC_SYSTEM_PROMPT,
+} from "../shared/prompts.js";
 
 // The exact, complete shape callClaude() in App.jsx is allowed to send.
 // Anything outside this (extra top-level fields, extra fields on a
-// message) is rejected outright rather than silently ignored.
-const ALLOWED_BODY_KEYS = ["model", "system", "messages", "max_tokens"];
+// message) is rejected outright rather than silently ignored. Note there
+// is no "system" field: the client sends a promptId (+ params for the one
+// parameterized prompt) and the server builds the real system prompt
+// itself from shared/prompts.js -- see PROMPT_BUILDERS below.
+const ALLOWED_BODY_KEYS = ["model", "promptId", "params", "messages", "max_tokens"];
 const ALLOWED_MESSAGE_KEYS = ["role", "content"];
+const ALLOWED_COACH_PARAM_KEYS = ["companionId", "stage1Type", "stage2Type", "stage3Type"];
 
 // llama-3.1-8b-instant was decommissioned by Groq on 2026-08-16; this
 // default was switched to their recommended replacement ahead of that
@@ -71,76 +88,57 @@ const DIAGNOSTIC_MAX_TOKENS_CAP = 2400;
 const REASONING_PARAMS = { reasoning_effort: "low", include_reasoning: false };
 const MAX_MESSAGES = 40;
 const MAX_MESSAGE_CHARS = 8000;
-const MAX_SYSTEM_CHARS = 12000;
 
-// validateBody only checked the "system" field's type/length, not its
-// content, which let any valid token holder set "system" to literally
-// anything and use this endpoint as a general-purpose LLM proxy against
-// the project's Groq quota (or try to steer the AI coach persona
-// off-topic). App.jsx only ever builds its system prompts from a fixed
-// set of prompt-builders (see src/App.jsx: buildCoachSystemPrompt,
-// TRANSFER_TEST_SYSTEM_PROMPT, COMPREHENSION_SYSTEM_PROMPT,
-// SINGLE_WORD_REGEN_PROMPT, LEVEL_MAKER_SYSTEM_PROMPT,
-// DIAGNOSTIC_SYSTEM_PROMPT), so pin against verbatim, distinctive
-// substrings from each of those real prompts' fixed opening text instead
-// of modifying src/App.jsx to add a wire-format marker. Most of these
-// prompts are plain template literals starting with fixed text, so a
-// startsWith() check works directly. buildCoachSystemPrompt is the one
-// exception: it opens with a per-companion persona sentence (see
-// COMPANION_PERSONAS) before the shared fixed sentence below, so for that
-// one we require the fixed marker to appear within the first stretch of
-// the string (comfortably longer than the longest persona sentence)
-// rather than at position 0.
+// Server-owned prompt authority: the client sends a promptId (+ narrow,
+// allow-listed params for the one parameterized prompt, "coach") and
+// NEVER a literal system-prompt string. Each builder below either returns
+// the real, fixed prompt text straight from shared/prompts.js, or — for
+// "coach" — validates its params against an explicit enum allow-list
+// before calling buildCoachSystemPrompt(), returning null on anything
+// that doesn't match so the handler can reject it with a 400.
 //
-// LIMITATION (documented, not fixed here): this only pins the *opening*
-// of the system prompt. A caller who already knows one of these fixed
-// prefixes could still prepend it verbatim and then append arbitrary
-// malicious continuation text, since nothing here checks the rest of the
-// string. That's an intentional, accepted gap for now — closing it fully
-// would need a wire-format change (e.g. the client sending a prompt *id*
-// instead of the full prompt text, with the server owning the actual
-// prompt strings), which is out of scope for this pass. This still closes
-// off the main abuse case (using the endpoint as an open LLM proxy for
-// unrelated prompts).
-// Pulled out on its own (rather than left inline in FIXED_SYSTEM_PREFIXES
-// below) because the diagnostic call also needs a taller max_tokens cap
-// than every other call — see DIAGNOSTIC_MAX_TOKENS_CAP.
-const DIAGNOSTIC_SYSTEM_PROMPT_PREFIX =
-  "You are the G.I.S.T. diagnostic engine. G.I.S.T. is purely an assessment tool,";
-
-const FIXED_SYSTEM_PREFIXES = [
-  DIAGNOSTIC_SYSTEM_PROMPT_PREFIX,
-  // TRANSFER_TEST_SYSTEM_PROMPT
-  "A Malaysian primary school ESL student just worked out a vocabulary word inside one specific passage.",
-  // COMPREHENSION_SYSTEM_PROMPT
-  "A Malaysian primary school ESL student just finished working through 5 vocabulary words from a passage.",
-  // SINGLE_WORD_REGEN_PROMPT
-  "You help a teacher fix one word in a G.I.S.T. map. You are given a passage and a list of words already chosen as targets,",
-  // LEVEL_MAKER_SYSTEM_PROMPT(wordCount)
-  "You help a teacher turn their own reading passage into a G.I.S.T. map for Malaysian primary school (Year 4-6) ESL students.",
-];
-
-// The fixed continuation of buildCoachSystemPrompt() that follows the
-// per-companion persona sentence. Longest persona string in
-// COMPANION_PERSONAS is well under 200 chars, so a 300-char search window
-// leaves comfortable margin without being so wide it stops meaning
-// anything.
-const COACH_PROMPT_MARKER =
-  "Help a Malaysian primary school ESL student (age 9-12) work out ONE target vocabulary word from context.";
-const COACH_PROMPT_MARKER_MAX_OFFSET = 300;
-
-function isAllowedSystemPrompt(system) {
-  if (FIXED_SYSTEM_PREFIXES.some((p) => system.startsWith(p))) return true;
-  const idx = system.indexOf(COACH_PROMPT_MARKER);
-  return idx !== -1 && idx <= COACH_PROMPT_MARKER_MAX_OFFSET;
+// This replaces an earlier approach that trusted a client-supplied
+// "system" string as long as it *started with* a known fixed prefix — a
+// caller who already knew one of those prefixes could prepend it verbatim
+// and then append arbitrary malicious continuation text, since nothing
+// checked the rest of the string. Now the client can't send prompt text
+// at all, so there's nothing to append to: the server reconstructs the
+// exact prompt itself from these fixed builders every time. (The prompt
+// TEXT itself isn't secret — it's also visible in the client bundle, e.g.
+// for the "Build Your Own G.I.S.T." blueprint — what matters is that the
+// client can no longer dictate what text is actually sent to Groq under
+// this app's key and quota.)
+function buildCoachPrompt(params) {
+  if (!isPlainObjectWithOnlyKeys(params, ALLOWED_COACH_PARAM_KEYS)) return null;
+  const { companionId, stage1Type, stage2Type, stage3Type } = params;
+  if (typeof companionId !== "string" || !Object.prototype.hasOwnProperty.call(COMPANION_PERSONAS, companionId)) return null;
+  if (!STAGE1_CYCLE.includes(stage1Type)) return null;
+  if (!STAGE2_CYCLE.includes(stage2Type)) return null;
+  if (!STAGE3_CYCLE.includes(stage3Type)) return null;
+  return buildCoachSystemPrompt(companionId, stage1Type, stage2Type, stage3Type);
 }
 
-// Same prefix-pinning approach as isAllowedSystemPrompt, reused here to
-// pick the token cap rather than trust a client-sent value — App.jsx also
+// The five non-coach prompts take no params at all — reject anything
+// other than "absent" (params === undefined) rather than silently
+// ignoring an unexpected params object.
+function fixedPrompt(promptText) {
+  return (params) => (params === undefined ? promptText : null);
+}
+
+const PROMPT_BUILDERS = {
+  coach: buildCoachPrompt,
+  transfer_test: fixedPrompt(TRANSFER_TEST_SYSTEM_PROMPT),
+  comprehension: fixedPrompt(COMPREHENSION_SYSTEM_PROMPT),
+  single_word_regen: fixedPrompt(SINGLE_WORD_REGEN_PROMPT),
+  level_maker: fixedPrompt(LEVEL_MAKER_SYSTEM_PROMPT(SESSION_WORD_COUNT)),
+  diagnostic: fixedPrompt(DIAGNOSTIC_SYSTEM_PROMPT),
+};
+
+// Decided by promptId now rather than sniffing prompt text — App.jsx also
 // requests a taller max_tokens for this call, but the server decides the
 // real ceiling either way.
-function isDiagnosticPrompt(system) {
-  return system.startsWith(DIAGNOSTIC_SYSTEM_PROMPT_PREFIX);
+function isDiagnosticPrompt(promptId) {
+  return promptId === "diagnostic";
 }
 
 // Best-effort per-instance rate limit. Serverless instances are short-lived
@@ -217,8 +215,9 @@ function getQuotaPreview(label) {
 function validateBody(body) {
   if (!isPlainObjectWithOnlyKeys(body, ALLOWED_BODY_KEYS)) return "Missing or unexpected fields in request body";
   if (body.model !== ALLOWED_MODEL) return "Unsupported model";
-  if (typeof body.system !== "string" || body.system.length > MAX_SYSTEM_CHARS) return "Invalid system prompt";
-  if (!isAllowedSystemPrompt(body.system)) return "Invalid system prompt";
+  if (typeof body.promptId !== "string" || !Object.prototype.hasOwnProperty.call(PROMPT_BUILDERS, body.promptId)) {
+    return "Invalid promptId";
+  }
   if (!Array.isArray(body.messages) || body.messages.length === 0 || body.messages.length > MAX_MESSAGES) {
     return "Invalid messages";
   }
@@ -298,6 +297,15 @@ export default async function claudeHandler(req, res) {
     return res.status(400).json({ error: validationError });
   }
 
+  // Build the real system prompt server-side from the promptId + params
+  // the client sent — see PROMPT_BUILDERS above. A null result means
+  // params didn't pass that promptId's allow-list (e.g. an unknown
+  // companionId or stage type for "coach").
+  const systemPrompt = PROMPT_BUILDERS[req.body.promptId](req.body.params);
+  if (typeof systemPrompt !== "string") {
+    return res.status(400).json({ error: "Invalid params" });
+  }
+
   // Quota is a count of *attempted* Groq calls, so it must not be charged
   // until we actually know a call is about to be attempted with a valid
   // key. Checking the quota ceiling itself still has to come before that,
@@ -328,10 +336,10 @@ export default async function claudeHandler(req, res) {
       },
       body: JSON.stringify({
         model: GROQ_MODEL,
-        messages: toGroqMessages(req.body.system, req.body.messages),
+        messages: toGroqMessages(systemPrompt, req.body.messages),
         max_tokens: Math.min(
           req.body.max_tokens || MAX_TOKENS_CAP,
-          isDiagnosticPrompt(req.body.system) ? DIAGNOSTIC_MAX_TOKENS_CAP : MAX_TOKENS_CAP
+          isDiagnosticPrompt(req.body.promptId) ? DIAGNOSTIC_MAX_TOKENS_CAP : MAX_TOKENS_CAP
         ),
         ...REASONING_PARAMS,
       }),
