@@ -1450,6 +1450,7 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, onViewDemoR
       {ANIMAL_COMPANIONS.map((a) => {
         const persona = COMPANION_PERSONAS[a.id];
         const isSelected = selected === a.id;
+        const dotTexture = `radial-gradient(${persona?.color?.border}${isSelected ? "40" : "26"} 1.4px, transparent 1.4px)`;
         return (
           <button
             key={a.id}
@@ -1460,7 +1461,8 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, onViewDemoR
             style={{
               borderWidth: "3px",
               borderColor: persona?.color?.border,
-              background: isSelected ? persona?.color?.gradient : persona?.color?.soft,
+              background: `${dotTexture}, ${isSelected ? persona?.color?.gradient : persona?.color?.soft}`,
+              backgroundSize: "13px 13px, auto",
             }}
           >
             <span className="text-3xl shrink-0">{a.emoji}</span>
@@ -1495,7 +1497,7 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, onViewDemoR
         <div className="relative z-10 bg-white p-2" style={{ ...CARD_GOLD, boxShadow: CARD_SHADOW_HERO }}>
           <div className="grid grid-cols-2">
             {/* Student panel */}
-            <div className="p-8 flex flex-col items-center text-center rounded-2xl" style={{ background: "#fffbeb" }}>
+            <div className="p-8 flex flex-col items-center text-center rounded-2xl" style={{ background: "radial-gradient(#f59e0b26 1.4px, transparent 1.4px), #fffbeb", backgroundSize: "13px 13px, auto" }}>
               <p className="font-display font-800 text-sm uppercase tracking-wide text-amber-700 mb-2">For Students</p>
               <span className="text-5xl mb-3">🔍</span>
               <p className="font-body text-sm text-stone-600 leading-relaxed mb-5 max-w-[220px]">
@@ -1517,7 +1519,7 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, onViewDemoR
             <div className="absolute left-1/2 top-8 bottom-8 w-px bg-stone-200" />
 
             {/* Teacher panel */}
-            <div className="p-8 flex flex-col items-center text-center rounded-2xl" style={{ background: "#f0fdfa" }}>
+            <div className="p-8 flex flex-col items-center text-center rounded-2xl" style={{ background: "radial-gradient(#0d948826 1.4px, transparent 1.4px), #f0fdfa", backgroundSize: "13px 13px, auto" }}>
               <p className="font-display font-800 text-sm uppercase tracking-wide text-stone-600 mb-2">For Teachers</p>
               <span className="text-5xl mb-3">🧑‍🏫</span>
               <p className="font-body text-sm text-stone-600 leading-relaxed mb-5 max-w-[240px]">
