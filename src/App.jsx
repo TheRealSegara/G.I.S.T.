@@ -393,6 +393,8 @@ const MAP_THEMES = [
   { name: "rust", gradient: "linear-gradient(135deg,#fed7aa,#fb923c)", border: "#c2410c", soft: "#ffedd5", text: "#9a3412" },
   { name: "gold", gradient: "linear-gradient(135deg,#fde047,#facc15)", border: "#ca8a04", soft: "#fef9c3", text: "#854d0e" },
   { name: "brick", gradient: "linear-gradient(135deg,#fca5a5,#f87171)", border: "#b91c1c", soft: "#fee2e2", text: "#991b1b" },
+  { name: "violet", gradient: "linear-gradient(135deg,#ddd6fe,#a78bfa)", border: "#6d28d9", soft: "#ede9fe", text: "#4c1d95" },
+  { name: "sky", gradient: "linear-gradient(135deg,#bae6fd,#38bdf8)", border: "#0369a1", soft: "#e0f2fe", text: "#0c4a6e" },
 ];
 
 function hashString(str) {
@@ -412,10 +414,17 @@ const BUILT_IN_MAP_THEME_NAMES = {
   "The Kite Festival": "amber",
 };
 
+const RESERVED_MAP_THEME_NAMES = new Set(Object.values(BUILT_IN_MAP_THEME_NAMES));
+// Custom (teacher-made) maps hash into only the themes no built-in passage
+// already owns, so a custom map can never render in the exact same color
+// as a built-in sitting next to it in the "Choose your map" grid.
+const CUSTOM_MAP_THEME_POOL = MAP_THEMES.filter((t) => !RESERVED_MAP_THEME_NAMES.has(t.name));
+
 function getMapTheme(idOrTitle) {
   const forced = BUILT_IN_MAP_THEME_NAMES[idOrTitle];
   if (forced) return MAP_THEMES.find((t) => t.name === forced) || MAP_THEMES[0];
-  return MAP_THEMES[hashString(idOrTitle) % MAP_THEMES.length];
+  const pool = CUSTOM_MAP_THEME_POOL.length > 0 ? CUSTOM_MAP_THEME_POOL : MAP_THEMES;
+  return pool[hashString(idOrTitle) % pool.length];
 }
 
 // SESSION_WORD_COUNT is imported from ../shared/prompts.js (fixed at 5,
@@ -2042,6 +2051,10 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, onViewDemoR
               const isLastOdd = arr.length % 2 === 1 && i === arr.length - 1;
               const theme = getMapTheme(p.title);
               const isSelected = passageId === id;
+              // A faint dot texture (same visual language as the app's
+              // compass/adventure motif elsewhere) keeps these cards from
+              // reading as flat settings-menu swatches.
+              const dotTexture = `radial-gradient(${theme.border}${isSelected ? "40" : "26"} 1.4px, transparent 1.4px)`;
               return (
                 <button
                   key={id}
@@ -2052,7 +2065,8 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, onViewDemoR
                   style={{
                     borderWidth: "3px",
                     borderColor: theme.border,
-                    background: isSelected ? theme.gradient : theme.soft,
+                    background: `${dotTexture}, ${isSelected ? theme.gradient : theme.soft}`,
+                    backgroundSize: "13px 13px, auto",
                   }}
                 >
                   <span className="text-3xl shrink-0">{p.emoji}</span>
