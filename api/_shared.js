@@ -89,6 +89,38 @@ export function pruneIfLarge(map, maxSize, isExpired) {
   }
 }
 
+// Sliding-window, per-key rate limiter. _claudeHandler.js, _authHandler.js,
+// _studentAuthHandler.js, and _teacherRosterHandler.js each used to carry
+// their own byte-for-byte copy of this (keyed by IP for most, by
+// label+name for one extra guard in _studentAuthHandler.js) -- one
+// implementation now, so a fix to the sliding-window logic itself can't
+// silently apply to only some of them. Same best-effort, per-instance
+// caveat as pruneIfLarge above: resets on each Vercel serverless cold
+// start, only durable within one long-lived server.js process.
+export function createRateLimiter(windowMs, maxRequests) {
+  const log = new Map();
+  return function check(key) {
+    pruneIfLarge(log, 5000, (e) => Date.now() - e.windowStart > windowMs);
+    const now = Date.now();
+    const entry = log.get(key);
+    if (!entry || now - entry.windowStart > windowMs) {
+      log.set(key, { windowStart: now, count: 1 });
+      return { limited: false, retryAfterMs: 0 };
+    }
+    entry.count += 1;
+    const limited = entry.count > maxRequests;
+    return { limited, retryAfterMs: limited ? Math.max(0, entry.windowStart + windowMs - now) : 0 };
+  };
+}
+
+// Every token-consuming handler repeated this Authorization-header parse
+// inline; centralized so there's one place that defines what a
+// well-formed bearer header looks like.
+export function getBearerToken(req) {
+  const header = req.headers["authorization"] || "";
+  return header.startsWith("Bearer ") ? header.slice(7) : null;
+}
+
 // True if obj is a plain, non-array object containing only keys present
 // in `allowedKeys`. Used to reject request bodies with extra/unexpected
 // fields (OWASP API3: mass assignment / excessive data exposure) instead

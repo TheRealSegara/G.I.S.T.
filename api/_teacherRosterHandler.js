@@ -13,24 +13,12 @@
 // roster returns nothing (GET) or deletes nothing (DELETE).
 
 import { verifyToken } from "./_auth.js";
-import { isOriginAllowed, getClientIp, pruneIfLarge } from "./_shared.js";
+import { isOriginAllowed, getClientIp, createRateLimiter, getBearerToken } from "./_shared.js";
 import { getSupabase } from "./_supabase.js";
 
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_REQUESTS = 30;
-const requestLog = new Map();
-
-function isRateLimited(ip) {
-  pruneIfLarge(requestLog, 5000, (e) => Date.now() - e.windowStart > RATE_LIMIT_WINDOW_MS);
-  const now = Date.now();
-  const entry = requestLog.get(ip);
-  if (!entry || now - entry.windowStart > RATE_LIMIT_WINDOW_MS) {
-    requestLog.set(ip, { windowStart: now, count: 1 });
-    return false;
-  }
-  entry.count += 1;
-  return entry.count > RATE_LIMIT_MAX_REQUESTS;
-}
+const checkRateLimit = createRateLimiter(RATE_LIMIT_WINDOW_MS, RATE_LIMIT_MAX_REQUESTS);
 
 async function fetchRoster(supabase, label, res) {
   const { data: students, error } = await supabase
@@ -129,7 +117,7 @@ export default async function teacherRosterHandler(req, res) {
   }
 
   const ip = getClientIp(req);
-  if (isRateLimited(ip)) {
+  if (checkRateLimit(ip).limited) {
     return res.status(429).json({ error: "Too many requests, please slow down" });
   }
 
@@ -138,8 +126,7 @@ export default async function teacherRosterHandler(req, res) {
     return res.status(500).json({ error: "Server is missing AUTH_SECRET" });
   }
 
-  const authHeader = req.headers["authorization"] || "";
-  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
+  const token = getBearerToken(req);
   const claims = verifyToken(token, secret);
   if (!claims || claims.kind === "student") {
     // See the matching comment in _studentAuthHandler.js — tokenInvalid is

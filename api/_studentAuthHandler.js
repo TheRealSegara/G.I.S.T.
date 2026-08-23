@@ -14,7 +14,7 @@
 // below, not the hash algorithm.
 
 import { verifyToken, signToken } from "./_auth.js";
-import { isOriginAllowed, getClientIp, pruneIfLarge, isPlainObjectWithOnlyKeys } from "./_shared.js";
+import { isOriginAllowed, getClientIp, pruneIfLarge, isPlainObjectWithOnlyKeys, createRateLimiter, getBearerToken } from "./_shared.js";
 import { getSupabase } from "./_supabase.js";
 import { normalizeName, isValidFullName, isValidSecret, isValidAvatarConfig, hashSecret, secretHashesMatch } from "./_studentAuth.js";
 
@@ -27,19 +27,7 @@ const TOKEN_TTL_MINUTES = Number(process.env.TOKEN_TTL_MINUTES) || 720;
 // guessing against a single account.
 const MAX_ATTEMPTS = 30;
 const ATTEMPT_WINDOW_MS = 60_000;
-const attemptLog = new Map();
-
-function isRateLimited(ip) {
-  pruneIfLarge(attemptLog, 5000, (e) => Date.now() - e.windowStart > ATTEMPT_WINDOW_MS);
-  const now = Date.now();
-  const entry = attemptLog.get(ip);
-  if (!entry || now - entry.windowStart > ATTEMPT_WINDOW_MS) {
-    attemptLog.set(ip, { windowStart: now, count: 1 });
-    return false;
-  }
-  entry.count += 1;
-  return entry.count > MAX_ATTEMPTS;
-}
+const checkRateLimit = createRateLimiter(ATTEMPT_WINDOW_MS, MAX_ATTEMPTS);
 
 // Second, tighter layer against secret brute-forcing, on top of the
 // per-IP limiter above: the per-IP counter alone doesn't help against an
@@ -97,7 +85,7 @@ export default async function studentAuthHandler(req, res) {
   }
 
   const ip = getClientIp(req);
-  if (isRateLimited(ip)) {
+  if (checkRateLimit(ip).limited) {
     return res.status(429).json({ error: "Too many attempts, please wait a minute and try again" });
   }
 
@@ -106,8 +94,7 @@ export default async function studentAuthHandler(req, res) {
     return res.status(500).json({ error: "Server is missing AUTH_SECRET" });
   }
 
-  const authHeader = req.headers["authorization"] || "";
-  const teacherToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
+  const teacherToken = getBearerToken(req);
   const claims = verifyToken(teacherToken, secret);
   if (!claims || claims.kind === "student") {
     // tokenInvalid distinguishes this from the OTHER 401 this same endpoint

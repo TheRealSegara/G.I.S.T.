@@ -10,8 +10,19 @@
 // results are a separate, per-student auth layer (see _studentAuth.js /
 // _studentAuthHandler.js / _sessionHandler.js) with its own access checks.
 
+import crypto from "node:crypto";
 import { signToken } from "./_auth.js";
-import { isOriginAllowed, getClientIp, pruneIfLarge, isPlainObjectWithOnlyKeys, DAILY_QUOTA_PER_CODE } from "./_shared.js";
+import { isOriginAllowed, getClientIp, isPlainObjectWithOnlyKeys, createRateLimiter, DAILY_QUOTA_PER_CODE } from "./_shared.js";
+
+// Constant-time string compare, same approach as the HMAC check in
+// _auth.js -- a plain === here would let response timing leak how many
+// leading characters of a guess matched the real code.
+function timingSafeStringEqual(a, b) {
+  const aBuf = Buffer.from(a);
+  const bBuf = Buffer.from(b);
+  if (aBuf.length !== bBuf.length) return false;
+  return crypto.timingSafeEqual(aBuf, bBuf);
+}
 
 // The exact, complete shape the access-code screen in App.jsx is allowed
 // to send. Anything outside this is rejected outright, not ignored.
@@ -20,7 +31,9 @@ const ALLOWED_BODY_KEYS = ["code"];
 const TOKEN_TTL_MINUTES = Number(process.env.TOKEN_TTL_MINUTES) || 720; // 12h: a school day plus margin
 const MAX_ATTEMPTS = 10;
 const ATTEMPT_WINDOW_MS = 60_000;
-const attemptLog = new Map();
+// Best-effort per-instance brute-force guard on code attempts, same
+// caveats as the rate limiter in _claudeHandler.js (resets per instance).
+const checkBruteForce = createRateLimiter(ATTEMPT_WINDOW_MS, MAX_ATTEMPTS);
 
 // ACCESS_CODES format: "code1:Label One,code2:Label Two". Label is
 // optional and defaults to the code itself; it's what per-code quota
@@ -62,7 +75,7 @@ export default async function authHandler(req, res) {
   }
 
   const ip = getClientIp(req);
-  if (isBruteForceBlocked(ip)) {
+  if (checkBruteForce(ip).limited) {
     return res.status(429).json({ error: "Too many attempts, please wait a minute and try again" });
   }
 
@@ -85,7 +98,7 @@ export default async function authHandler(req, res) {
     return res.status(400).json({ error: "Missing access code" });
   }
 
-  const match = codes.find((c) => c.code === submitted);
+  const match = codes.find((c) => timingSafeStringEqual(c.code, submitted));
   if (!match) {
     return res.status(401).json({ error: "Invalid access code" });
   }

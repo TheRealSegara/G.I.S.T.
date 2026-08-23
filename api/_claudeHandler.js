@@ -13,7 +13,7 @@
 // git history / commit messages around this change for the comparison.
 
 import { verifyToken } from "./_auth.js";
-import { isOriginAllowed, getClientIp, pruneIfLarge, isPlainObjectWithOnlyKeys, DAILY_QUOTA_PER_CODE } from "./_shared.js";
+import { isOriginAllowed, getClientIp, pruneIfLarge, isPlainObjectWithOnlyKeys, createRateLimiter, getBearerToken, DAILY_QUOTA_PER_CODE } from "./_shared.js";
 import {
   SESSION_WORD_COUNT,
   COMPANION_PERSONAS,
@@ -165,25 +165,13 @@ function isDiagnosticPrompt(promptId) {
 // DAILY_QUOTA_PER_CODE in _shared.js.
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_REQUESTS = Number(process.env.RATE_LIMIT_MAX_REQUESTS) || 30;
-const requestLog = new Map();
+const checkRateLimit = createRateLimiter(RATE_LIMIT_WINDOW_MS, RATE_LIMIT_MAX_REQUESTS);
 
 // Per-access-code daily quota, keyed by the label embedded in the token
 // (see _authHandler.js / ACCESS_CODES), not by IP. Same best-effort,
 // per-instance caveat as the rate limiter above. DAILY_QUOTA_PER_CODE
 // itself lives in _shared.js since _authHandler.js needs it too.
 const quotaLog = new Map();
-
-function isRateLimited(ip) {
-  pruneIfLarge(requestLog, 5000, (e) => Date.now() - e.windowStart > RATE_LIMIT_WINDOW_MS);
-  const now = Date.now();
-  const entry = requestLog.get(ip);
-  if (!entry || now - entry.windowStart > RATE_LIMIT_WINDOW_MS) {
-    requestLog.set(ip, { windowStart: now, count: 1 });
-    return false;
-  }
-  entry.count += 1;
-  return entry.count > RATE_LIMIT_MAX_REQUESTS;
-}
 
 // Increments and returns this access code's usage for today. Included in
 // every response from this point on so the frontend can show a live "X
@@ -261,24 +249,21 @@ export default async function claudeHandler(req, res) {
   }
 
   const ip = getClientIp(req);
-  if (isRateLimited(ip)) {
+  const rateLimit = checkRateLimit(ip);
+  if (rateLimit.limited) {
     // Unlike the daily-quota 429 below, this clears itself within
     // RATE_LIMIT_WINDOW_MS (60s) — worth the client auto-retrying rather
     // than making a student/teacher notice and click Retry manually.
     // retryAfterMs here is however long is actually left in THIS ip's
-    // window (isRateLimited just updated requestLog above), not the full
-    // 60s — a classroom sharing one IP can trip this mid-window, and
-    // without a real number the client would otherwise fall back to its
-    // own fixed 20s guess, which can undershoot and dead-end the retry
-    // exactly like the Groq-upstream 429 case this same mechanism exists
-    // to fix (see retryAfterMs handling further down).
-    const entry = requestLog.get(ip);
-    const retryAfterMs = entry ? Math.max(0, entry.windowStart + RATE_LIMIT_WINDOW_MS - Date.now()) : RATE_LIMIT_WINDOW_MS;
-    return res.status(429).json({ error: "Too many requests, please slow down", retryable: true, retryAfterMs });
+    // window, not the full 60s — a classroom sharing one IP can trip this
+    // mid-window, and without a real number the client would otherwise
+    // fall back to its own fixed 20s guess, which can undershoot and
+    // dead-end the retry exactly like the Groq-upstream 429 case this same
+    // mechanism exists to fix (see retryAfterMs handling further down).
+    return res.status(429).json({ error: "Too many requests, please slow down", retryable: true, retryAfterMs: rateLimit.retryAfterMs });
   }
 
-  const authHeader = req.headers["authorization"] || "";
-  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
+  const token = getBearerToken(req);
   const claims = verifyToken(token, process.env.AUTH_SECRET);
   if (!claims) {
     // See the matching comment in _studentAuthHandler.js — tokenInvalid is
