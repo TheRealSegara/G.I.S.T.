@@ -414,17 +414,36 @@ const BUILT_IN_MAP_THEME_NAMES = {
   "The Kite Festival": "amber",
 };
 
-const RESERVED_MAP_THEME_NAMES = new Set(Object.values(BUILT_IN_MAP_THEME_NAMES));
-// Custom (teacher-made) maps hash into only the themes no built-in passage
-// already owns, so a custom map can never render in the exact same color
-// as a built-in sitting next to it in the "Choose your map" grid.
-const CUSTOM_MAP_THEME_POOL = MAP_THEMES.filter((t) => !RESERVED_MAP_THEME_NAMES.has(t.name));
-
-function getMapTheme(idOrTitle) {
-  const forced = BUILT_IN_MAP_THEME_NAMES[idOrTitle];
-  if (forced) return MAP_THEMES.find((t) => t.name === forced) || MAP_THEMES[0];
-  const pool = CUSTOM_MAP_THEME_POOL.length > 0 ? CUSTOM_MAP_THEME_POOL : MAP_THEMES;
-  return pool[hashString(idOrTitle) % pool.length];
+// Assigns a color to every passage in `entries` (an [id, passage] array, in
+// display order) so no two entries on screen together share a color --
+// built-ins claim their forced theme first, then each custom map takes the
+// nearest still-free theme to its title's hash. A static reserved-vs-free
+// split can't do this: with 6 of 8 themes pinned to built-ins, a fixed
+// 2-color pool for customs would collide with itself the moment a teacher
+// has 3+ custom maps. Only degrades (repeats a color) once there are more
+// passages than themes (9+), an inherent limit of a fixed-size palette.
+function getMapThemesForList(entries) {
+  const used = new Set();
+  const result = new Map();
+  for (const [id, p] of entries) {
+    const forced = BUILT_IN_MAP_THEME_NAMES[p.title];
+    if (!forced) continue;
+    const theme = MAP_THEMES.find((t) => t.name === forced) || MAP_THEMES[0];
+    result.set(id, theme);
+    used.add(theme.name);
+  }
+  for (const [id, p] of entries) {
+    if (result.has(id)) continue;
+    const startIdx = hashString(p.title) % MAP_THEMES.length;
+    let theme = MAP_THEMES[startIdx];
+    for (let i = 0; i < MAP_THEMES.length; i++) {
+      const candidate = MAP_THEMES[(startIdx + i) % MAP_THEMES.length];
+      if (!used.has(candidate.name)) { theme = candidate; break; }
+    }
+    result.set(id, theme);
+    used.add(theme.name);
+  }
+  return result;
 }
 
 // SESSION_WORD_COUNT is imported from ../shared/prompts.js (fixed at 5,
@@ -2049,9 +2068,12 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, onViewDemoR
           </div>
 
           <div className="grid grid-cols-2 gap-2.5">
-            {Object.entries(allPassages).map(([id, p], i, arr) => {
+            {(() => {
+              const entries = Object.entries(allPassages);
+              const themes = getMapThemesForList(entries);
+              return entries.map(([id, p], i, arr) => {
               const isLastOdd = arr.length % 2 === 1 && i === arr.length - 1;
-              const theme = getMapTheme(p.title);
+              const theme = themes.get(id);
               const isSelected = passageId === id;
               // A faint dot texture (same visual language as the app's
               // compass/adventure motif elsewhere) keeps these cards from
@@ -2078,7 +2100,8 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, onViewDemoR
                   </div>
                 </button>
               );
-            })}
+              });
+            })()}
           </div>
 
           {passageId && allPassages[passageId] && (
