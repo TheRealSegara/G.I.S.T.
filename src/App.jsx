@@ -1356,7 +1356,7 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, onViewDemoR
   const [makerGenerating, setMakerGenerating] = useState(false);
   const [makerError, setMakerError] = useState(null);
   const [makerSaved, setMakerSaved] = useState(false);
-  const [makerWords, setMakerWords] = useState(["", "", ""]);
+  const [makerWords, setMakerWords] = useState(() => Array(SESSION_WORD_COUNT).fill(""));
   const [regeneratingIndex, setRegeneratingIndex] = useState(null);
 
   const allPassages = { ...PASSAGES, ...Object.fromEntries(customPassages.map((p) => [p.id, p])) };
@@ -1619,16 +1619,18 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, onViewDemoR
             <h1 className="font-display font-800 text-xl text-stone-700 block mb-2 text-center">Create your own map</h1>
             <p className="font-body text-xs text-stone-500 text-center mb-5">Paste a passage (about 80-150 words). The AI will pick {SESSION_WORD_COUNT} good target words with real context clues.</p>
 
-            <label className="font-display font-700 text-xs uppercase tracking-wide text-teal-700 block mb-2">Map title</label>
+            <label htmlFor="maker-title" className="font-display font-700 text-xs uppercase tracking-wide text-teal-700 block mb-2">Map title</label>
             <input
+              id="maker-title"
               value={makerTitle}
               onChange={(e) => setMakerTitle(e.target.value)}
               placeholder="e.g. A Day at the Market"
               className="w-full bg-teal-50 rounded-2xl border-2 border-teal-300 px-4 py-3 font-body text-stone-700 mb-4 focus:outline-none focus:border-teal-500"
             />
 
-            <label className="font-display font-700 text-xs uppercase tracking-wide text-teal-700 block mb-2">Passage text</label>
+            <label htmlFor="maker-text" className="font-display font-700 text-xs uppercase tracking-wide text-teal-700 block mb-2">Passage text</label>
             <textarea
+              id="maker-text"
               value={makerText}
               onChange={(e) => setMakerText(e.target.value)}
               placeholder="Paste or write your passage here…"
@@ -1664,6 +1666,7 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, onViewDemoR
                   value={w}
                   onChange={(e) => setMakerWords((prev) => prev.map((v, idx) => (idx === i ? e.target.value : v)))}
                   placeholder={`Word ${i + 1}`}
+                  aria-label={`Word ${i + 1} to highlight (optional)`}
                   className="w-full bg-teal-50 rounded-xl border-2 border-teal-300 px-2 py-2 font-body text-xs sm:text-sm text-stone-700 text-center focus:outline-none focus:border-teal-500"
                 />
               ))}
@@ -1818,6 +1821,7 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, onViewDemoR
             value={authName}
             onChange={(e) => setAuthName(e.target.value)}
             placeholder="Your full name"
+            aria-label="Your full name"
             maxLength={80}
             autoComplete="off"
             spellCheck={false}
@@ -1884,6 +1888,7 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, onViewDemoR
             value={authName}
             onChange={(e) => setAuthName(e.target.value)}
             placeholder="Your full name"
+            aria-label="Your full name"
             maxLength={80}
             autoComplete="off"
             spellCheck={false}
@@ -3175,6 +3180,13 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onBack
   const exchangeCountRef = useRef(0);
   const scrollRef = useRef(null);
   const [showSettings, setShowSettings] = useState(false);
+  // skipWord defers onWordResolved by 2.2s so the student has time to read
+  // the reveal message. If they tap Back (or the parent otherwise unmounts
+  // this screen) before that fires, this must be cancelled -- otherwise the
+  // pending call lands after they've already re-opened and re-skipped the
+  // same word from PassageScreen, double-appending it to the log/report.
+  const skipTimeoutRef = useRef(null);
+  useEffect(() => () => { if (skipTimeoutRef.current) clearTimeout(skipTimeoutRef.current); }, []);
 
   // Slide navigation: one slide per stage instead of one long scrolling
   // transcript, which used to crowd out readability. activeSlide follows
@@ -3312,7 +3324,7 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onBack
     if (soundEnabled) setTimeout(() => speak(revealText), 300);
     setCurrent(null);
     setWordDone(true);
-    setTimeout(() => {
+    skipTimeoutRef.current = setTimeout(() => {
       onWordResolved({
         word: targetWord.word,
         clueType: targetWord.clueType,
@@ -3939,7 +3951,8 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onBack
                       <input
                         value={textInput}
                         onChange={(e) => setTextInput(e.target.value)}
-                        placeholder="...finish it here"
+                        placeholder="…finish it here"
+                        aria-label="Finish the sentence"
                         className="flex-1 min-w-[100px] bg-transparent font-body text-lg sm:text-xl text-stone-700 focus:outline-none"
                         autoFocus
                         disabled={!answersEnabled}
@@ -3951,6 +3964,7 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onBack
                       value={textInput}
                       onChange={(e) => setTextInput(e.target.value)}
                       placeholder="Type your answer…"
+                      aria-label="Your answer"
                       className="w-full bg-white rounded-2xl border-3 border-stone-300 px-4 py-3.5 font-body text-lg sm:text-xl text-stone-700 focus:outline-none focus:border-teal-400"
                       style={{ borderWidth: "3px" }}
                       autoFocus
@@ -5438,6 +5452,14 @@ function FileBoxScreen({ onBack }) {
     return () => { cancelled = true; };
   }, []);
 
+  // Both fetches below are keyed by an incrementing request id rather than
+  // a simple "cancelled" flag: a teacher can tap one student/session, then
+  // quickly tap another before the first request resolves. Without this,
+  // whichever response lands LAST wins even if it was requested first,
+  // showing one student's name next to another's session data.
+  const sessionsRequestRef = useRef(0);
+  const detailRequestRef = useRef(0);
+
   function openStudent(student) {
     SFX.tap();
     setSelectedStudent(student);
@@ -5445,10 +5467,11 @@ function FileBoxScreen({ onBack }) {
     setSessionsError(null);
     setSessionsLoading(true);
     setView("sessions");
+    const requestId = ++sessionsRequestRef.current;
     fetchStudentSessions(student.id)
-      .then((data) => setSessions(data.sessions))
-      .catch((e) => setSessionsError(e.message || "Couldn't load this student's sessions"))
-      .finally(() => setSessionsLoading(false));
+      .then((data) => { if (requestId === sessionsRequestRef.current) setSessions(data.sessions); })
+      .catch((e) => { if (requestId === sessionsRequestRef.current) setSessionsError(e.message || "Couldn't load this student's sessions"); })
+      .finally(() => { if (requestId === sessionsRequestRef.current) setSessionsLoading(false); });
   }
 
   function openSession(session) {
@@ -5458,10 +5481,11 @@ function FileBoxScreen({ onBack }) {
     setDetailError(null);
     setDetailLoading(true);
     setView("detail");
+    const requestId = ++detailRequestRef.current;
     fetchSessionDetail(session.id)
-      .then((data) => setSessionDetail(data))
-      .catch((e) => setDetailError(e.message || "Couldn't load this session"))
-      .finally(() => setDetailLoading(false));
+      .then((data) => { if (requestId === detailRequestRef.current) setSessionDetail(data); })
+      .catch((e) => { if (requestId === detailRequestRef.current) setDetailError(e.message || "Couldn't load this session"); })
+      .finally(() => { if (requestId === detailRequestRef.current) setDetailLoading(false); });
   }
 
   if (view === "detail") {
