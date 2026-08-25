@@ -1148,11 +1148,15 @@ function validateCoachResponse(parsed, targetWordText) {
   if (COACH_TYPES_NEEDING_OPTIONS.has(parsed.input_type)) {
     if (!Array.isArray(parsed.options) || parsed.options.length < 2) return false;
     if (parsed.input_type === "true_false" && parsed.options.length !== 2) return false;
+    if ((parsed.input_type === "tap_select" || parsed.input_type === "reverse_clue") && (parsed.options.length < 3 || parsed.options.length > 6)) return false;
     if (typeof parsed.correct_answer !== "string" || !parsed.options.includes(parsed.correct_answer)) return false;
   }
   if (COACH_TYPES_NEEDING_TILES.has(parsed.input_type) && (!Array.isArray(parsed.word_tiles) || parsed.word_tiles.length === 0)) {
     return false;
   }
+  // true_false must pose a statement to judge, not a question — a question
+  // with True/False buttons under it gives the student nothing to judge.
+  if (parsed.input_type === "true_false" && /\?\s*$/.test(parsed.message.trim())) return false;
   if (!targetWordText) return true; // no target word available to check content against
 
   // Content checks: the shape can be perfectly valid JSON while still being
