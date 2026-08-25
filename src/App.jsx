@@ -1731,6 +1731,15 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, onViewDemoR
                 Demo Mode {demoModeActive ? "ON" : "OFF"}
               </span>
             </button>
+            {demoModeActive && (
+              <button
+                onClick={() => { SFX.tap(); setAuthError(null); setMode("student-choice"); }}
+                className="flex items-center gap-1.5 font-display font-700 text-xs text-white rounded-full px-4 py-1.5 step-in"
+                style={{ background: "linear-gradient(180deg,#a78bfa,#7c3aed)", boxShadow: "0 3px 0 0 #5b21b6" }}
+              >
+                <Play className="inline w-3.5 h-3.5 fill-current" /> Start Playing
+              </button>
+            )}
           </div>
         </div>
         <Footer />
@@ -2283,7 +2292,11 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, onViewDemoR
             <BigButton
               onClick={async () => {
                 if (!passageId) return;
-                if (!pendingSignup) {
+                // Demo Mode never touches the real account/session tables —
+                // skip the real signup call entirely (studentAuth stays
+                // unset) so a practice run here can never leave a fake
+                // student or session behind in a teacher's real roster.
+                if (!pendingSignup || demoModeActive) {
                   onBegin(studentId.trim(), avatarConfig, passageId, SESSION_WORD_COUNT);
                   return;
                 }
@@ -6584,6 +6597,7 @@ function AccessGateScreen({ onUnlocked }) {
 
 /* ---------------- App ---------------- */
 export default function App() {
+  const demoModeActive = useDemoMode();
   const [screen, setScreen] = useState("setup");
   const [studentId, setStudentId] = useState("");
   const [avatarConfig, setAvatarConfig] = useState(DEFAULT_AVATAR_CONFIG);
@@ -6878,7 +6892,7 @@ export default function App() {
               // save shouldn't block the recap screen the student is
               // waiting on, it just means this session won't show up in
               // the teacher's File Box later.
-              if (studentAuth) {
+              if (studentAuth && !demoModeActive) {
                 saveSession({
                   passageTitle: passage.title,
                   passageEmoji: passage.emoji,
