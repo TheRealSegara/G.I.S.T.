@@ -16,10 +16,10 @@
 // content, e.g. "the little brother"), so these are NOT run through the
 // generic sentence-extraction fallback below -- they're already grounded.
 const CORE_WORDS = {
-  reluctant: { meaning: "Unwilling; hesitant", distractors: ["Very excited", "Completely confused", "Extremely brave"], hint: "Think about how the little brother acted before he saw the orang utan." },
+  reluctant: { meaning: "Unwilling; hesitant", distractors: ["Very excited", "Completely confused", "Extremely brave"], hint: "Think about how the little brother acted before seeing the orang utan." },
   enormous: { meaning: "Very big; huge", distractors: ["Very small", "Very fast", "Very colourful"], hint: "The passage compares its size to something else nearby." },
   curious: { meaning: "Eager to know more", distractors: ["Feeling sleepy", "Feeling angry", "Feeling bored"], hint: "Think about why he kept asking questions." },
-  damp: { meaning: "Slightly wet", distractors: ["Very hot", "Completely dry", "Very cold"], hint: "The passage explains why the fur felt this way — it had just rained." },
+  damp: { meaning: "Slightly wet", distractors: ["Very hot", "Completely dry", "Very cold"], hint: "The fur felt this way because it had just rained." },
   gentle: { meaning: "Kind and calm", distractors: ["Loud and rough", "Fast and messy", "Shy and quiet"], hint: "The ranger contrasts how they look with how they actually behave." },
   bustling: { meaning: "Busy and lively", distractors: ["Quiet and empty", "Slow and sleepy", "Dark and scary"], hint: "Think about the stalls and children running everywhere." },
   delighted: { meaning: "Very pleased", distractors: ["Very worried", "Very confused", "Very tired"], hint: "Think about grandmother's big smile." },
@@ -100,20 +100,59 @@ const COMPREHENSION_BY_PASSAGE = [
 // touching the part that has to stay accurate.
 const INTRO_TEMPLATES = [
   function (word) { return "Let's figure out what \"" + word + "\" means here! Pick the best answer."; },
-  function (word) { return "Time to work out \"" + word + "\" — read carefully and pick what fits best."; },
+  function (word) { return "Time to work out \"" + word + "\"! Read carefully and pick what fits best."; },
   function (word) { return "New word alert: \"" + word + "\"! Let's see if you can work out what it means."; },
 ];
+// Each wrapper deliberately ends its own lead-in on a full sentence
+// break (never a dash/colon that would run on into the hint) -- the real
+// frontend's validator caps every SENTENCE at 12 words, and several
+// curated hints are already close to that on their own, so concatenating
+// a lead-in onto the same sentence as the hint (as this used to do with
+// an em dash) could push a perfectly fine hint over the limit.
 const WRONG_WRAPPERS = [
   function (hint) { return "Not quite! " + hint; },
-  function (hint) { return "Close, but not quite — " + hint.charAt(0).toLowerCase() + hint.slice(1); },
-  function (hint) { return "Almost! Here's a clue: " + hint; },
+  function (hint) { return "Close, but not quite. " + hint; },
+  function (hint) { return "Almost! " + hint; },
 ];
-const RESOLVED_TEMPLATES = [
-  function (word, meaning) { return "Nice work, you've got it! \"" + word + "\" really does mean " + meaning + "."; },
-  function (word, meaning) { return "That's it! \"" + word + "\" means " + meaning + " — great context-clue reading."; },
-  function (word, meaning) { return "You nailed it! \"" + word + "\" means " + meaning + " here."; },
+// Used when a correct answer advances the word to a harder stage (1-3),
+// as opposed to FINAL_RESOLVED_TEMPLATES below, which is only for the
+// word actually being done (succeeding at Stage 4 or 5).
+const ADVANCE_TEMPLATES = [
+  function (word) { return "Nice! Let's go a bit deeper with \"" + word + "\"."; },
+  function (word) { return "Got it! Time for a trickier challenge with \"" + word + "\"."; },
+  function (word) { return "Well done! Let's push a little further with \"" + word + "\"."; },
+];
+const FINAL_RESOLVED_TEMPLATES = [
+  function (word) { return "Excellent! You've truly mastered \"" + word + "\"."; },
+  function (word) { return "That's it, you really know \"" + word + "\" now!"; },
+  function (word) { return "Amazing work, \"" + word + "\" is yours now!"; },
 ];
 function pickOne(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+
+// Deterministic (letters only shuffled) tiles for word_bank/letter_connect
+// -- exact letters of `word`, nothing added or dropped, matching
+// tilesMatchWord's check in the real frontend's validator.
+function shuffleLetters(word) {
+  const letters = word.split("");
+  for (let i = letters.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const tmp = letters[i];
+    letters[i] = letters[j];
+    letters[j] = tmp;
+  }
+  return letters;
+}
+
+// Builds a tap_select/reverse_clue options list guaranteed to satisfy the
+// real frontend's optionInSentence check -- every option is drawn from
+// `tokens` itself (the exact words the caller's display_sentence is built
+// from), never invented separately, so it can never mismatch.
+function pickOptionsFromTokens(tokens, targetToken, count) {
+  const cleaned = tokens.map(function (t) { return t.replace(/[.,!?;:"']/g, ""); }).filter(Boolean);
+  const others = cleaned.filter(function (t) { return t.toLowerCase() !== targetToken.toLowerCase(); });
+  const extra = pickDistinct(others, Math.max(0, count - 1), null);
+  return [targetToken].concat(extra).sort(function () { return Math.random() - 0.5; });
+}
 
 function findLiteralWord(text) {
   const m = /target word "([^"]+)"/.exec(text || "");
@@ -168,13 +207,20 @@ function extractRealWords(text) {
 // fixed passage-specific hint (the 30-word extended dictionary) -- grounds
 // it in the real sentence from whatever passage the teacher pasted, rather
 // than a generic "think about it" filler.
+// Deliberately never quotes the actual sentence here -- it's already
+// shown verbatim in its own "From the passage" box via display_sentence,
+// which has no length cap, while this hint feeds into a "message" that
+// DOES (12 words per sentence, checked by the real frontend's
+// validator). A real passage sentence can easily run past that on its
+// own, so repeating it inside a length-capped field risked failing
+// validation on every retry for an otherwise perfectly fine word.
 function buildContextualHint(word, allMsgs) {
   const passageText = extractPassageText(allMsgs);
   const sentence = getSentenceContaining(passageText, word);
   if (sentence && sentence.trim()) {
-    return "Look at this part again: \"" + sentence.trim() + "\" — which meaning fits best there?";
+    return "Look at the sentence above again. Which meaning fits best there?";
   }
-  return "Think about how \"" + word + "\" is used in the sentence — which meaning fits best?";
+  return "Think about how \"" + word + "\" is used here.";
 }
 
 /* ---------------- diagnostic report templates ---------------- */
@@ -313,54 +359,121 @@ function mockClaude(promptId, messages) {
     const word = findLiteralWord(allMsgs) || KNOWN_WORDS[Math.floor(Math.random() * KNOWN_WORDS.length)];
     const w = WORDS[word];
     const isFirstTurn = messages.length <= 1;
+
+    // The real frontend always sends the coach's own previous reply back
+    // as a JSON-stringified assistant message (see submitAnswer/startWord
+    // in src/App.jsx) -- reading it back out is a far more reliable way
+    // to know what stage/type the student just answered than re-deriving
+    // it from FACT-tag counts, and it's the only way that works
+    // uniformly for "text" turns too (Stage 4/5 never get a deterministic
+    // [FACT: this answer is CORRECT] tag at all, since the real app
+    // leaves that judgment to the AI).
+    let priorStage = 1;
+    let priorInputType = null;
+    if (!isFirstTurn) {
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i].role === "assistant") {
+          try {
+            const priorParsed = JSON.parse(messages[i].content);
+            priorStage = priorParsed.stage || 1;
+            priorInputType = priorParsed.input_type || null;
+          } catch (e) { /* keep the stage-1 default */ }
+          break;
+        }
+      }
+    }
+
     const wasCorrect = /\[FACT: this answer is CORRECT\./.test(lastMsg);
+    const missingWordFact = /\[FACT: the answer does not contain the target word/.test(lastMsg);
+    const accepted = priorInputType === "text" ? !missingWordFact : wasCorrect;
 
-    // A word with no curated dictionary entry at all (outside both the core
-    // 20 and the extended 30) -- fall back to an MCQ built from a
-    // DIFFERENT known word's meaning/distractor shape (self-consistent
-    // MCQ, not a real definition for this word), same trade-off already
-    // made for the transfer_test fallback below. Deliberately never
-    // "text" here: Stage 1 always needs a real correct_answer for the
-    // frontend to check the tap against, not a free-typed exchange graded
-    // by nothing (the real coach never uses "text" at Stage 1 either --
-    // see STAGE1_CYCLE and buildCoachSystemPrompt's CORRECTNESS rules).
-    if (!w) {
-      const passageText = extractPassageText(allMsgs);
-      let sentence = getSentenceContaining(passageText, word);
-      sentence = sentence ? sentence.trim() : "";
-      if (!sentence) sentence = "The passage uses \"" + word + "\" somewhere in the story.";
-      const borrowed = WORDS[KNOWN_WORDS[Math.floor(Math.random() * KNOWN_WORDS.length)]];
-      const options = [borrowed.meaning].concat(pickDistinct(borrowed.distractors, 3, null)).sort(function () { return Math.random() - 0.5; });
-      if (isFirstTurn) {
-        return { message: pickOne(INTRO_TEMPLATES)(word), display_sentence: sentence, input_type: "mcq", options: options, word_tiles: null, correct_answer: borrowed.meaning, sentence_starter: null, stage: 1, grading_reasoning: null, hint_given: false, resolved: false, fun_fact: null };
+    // Progression: a brand new word always starts at Stage 1; a correct
+    // answer advances exactly one stage at a time (so a full playthrough
+    // demonstrates every mechanic, not just some of them); an incorrect
+    // one gets a hint and retries the SAME stage. Only succeeding at
+    // Stage 5 resolves the word here -- the real coach can resolve early
+    // at Stage 4, but a demo mock deliberately doesn't take that
+    // shortcut, so a full correct playthrough always shows all 5 stages
+    // rather than sometimes stopping at 4.
+    let stage = 1;
+    let hintGiven = false;
+    let resolved = false;
+    if (!isFirstTurn) {
+      if (accepted) {
+        if (priorStage >= 5) { stage = priorStage; resolved = true; }
+        else { stage = priorStage + 1; }
+      } else {
+        stage = priorStage;
+        hintGiven = true;
       }
-      if (wasCorrect) {
-        return { message: pickOne(RESOLVED_TEMPLATES)(word, borrowed.meaning.toLowerCase()), display_sentence: sentence, input_type: "mcq", options: options, word_tiles: null, correct_answer: borrowed.meaning, sentence_starter: null, stage: 1, grading_reasoning: null, hint_given: false, resolved: true, fun_fact: "Great context-clue reading!" };
+    }
+
+    const hintText = (w && w.hint) || buildContextualHint(word, allMsgs);
+    const passageText = extractPassageText(allMsgs);
+    let groundedSentence = getSentenceContaining(passageText, word);
+    groundedSentence = (groundedSentence && groundedSentence.trim()) || ("The passage uses \"" + word + "\" — read the sentence carefully.");
+
+    // Stage 1: MCQ. Uses the word's own curated meaning/distractors when
+    // available; otherwise borrows another known word's shape (a
+    // self-consistent MCQ, not a real definition for this word) rather
+    // than fail outright -- same trade-off transfer_test's own fallback
+    // makes further down. Deliberately never "text" here: the real coach
+    // never uses free typing at Stage 1 either (see STAGE1_CYCLE).
+    if (stage === 1) {
+      const shape = w || WORDS[KNOWN_WORDS[Math.floor(Math.random() * KNOWN_WORDS.length)]];
+      const options = [shape.meaning].concat(pickDistinct(shape.distractors, 3, null)).sort(function () { return Math.random() - 0.5; });
+      const message = isFirstTurn ? pickOne(INTRO_TEMPLATES)(word) : pickOne(WRONG_WRAPPERS)(hintText);
+      return { message: message, display_sentence: groundedSentence, input_type: "mcq", options: options, word_tiles: null, correct_answer: shape.meaning, sentence_starter: null, stage: 1, grading_reasoning: null, hint_given: hintGiven, resolved: false, fun_fact: null };
+    }
+
+    // Stage 2: word_bank or letter_connect (deterministic per word, so a
+    // retry after a wrong spelling attempt stays the same mechanic).
+    if (stage === 2) {
+      const inputType = word.charCodeAt(0) % 2 === 0 ? "word_bank" : "letter_connect";
+      const message = hintGiven ? "Not quite, try spelling it again!" : pickOne(ADVANCE_TEMPLATES)(word);
+      return { message: message, display_sentence: groundedSentence, input_type: inputType, options: null, word_tiles: shuffleLetters(word), correct_answer: null, sentence_starter: null, stage: 2, grading_reasoning: null, hint_given: hintGiven, resolved: false, fun_fact: null };
+    }
+
+    // Stage 3: tap_select (word used WRONG, built from a small fixed
+    // sentence the mock fully controls, so the wrong word and its
+    // options can never mismatch what's actually displayed) or
+    // reverse_clue (word used correctly, grounded in the real passage
+    // sentence when it has enough other words to draw options from,
+    // otherwise the same kind of safe fixed sentence).
+    if (stage === 3) {
+      const inputType = word.length % 2 === 0 ? "tap_select" : "reverse_clue";
+      if (inputType === "tap_select") {
+        const tokens = ["Somehow", "the", "weather", "felt", word, "again", "today"];
+        const message = hintGiven ? "Not quite, look again!" : "Tap the word that's used wrong!";
+        return { message: message, display_sentence: tokens.join(" ") + ".", input_type: "tap_select", options: pickOptionsFromTokens(tokens, word, 4), word_tiles: null, correct_answer: word, sentence_starter: null, stage: 3, grading_reasoning: null, hint_given: hintGiven, resolved: false, fun_fact: null };
       }
-      return { message: pickOne(WRONG_WRAPPERS)("Look at this part again: \"" + sentence + "\" — which meaning fits best there?"), display_sentence: sentence, input_type: "mcq", options: options, word_tiles: null, correct_answer: borrowed.meaning, sentence_starter: null, stage: 1, grading_reasoning: null, hint_given: true, resolved: false, fun_fact: null };
+      const rawTokens = groundedSentence.replace(/[.,!?;:"']/g, "").split(/\s+/).filter(Boolean);
+      const usableTokens = rawTokens.filter(function (t) { return t.toLowerCase() !== word.toLowerCase(); });
+      const tokens = usableTokens.length >= 3 ? rawTokens : ["Everyone", "noticed", "how", word, "seemed", "today"];
+      const sentence = usableTokens.length >= 3 ? groundedSentence : tokens.join(" ") + ".";
+      const clueCandidates = tokens.filter(function (t) { return t.toLowerCase() !== word.toLowerCase() && t.length > 3; });
+      const clueToken = clueCandidates[0] || tokens.filter(function (t) { return t.toLowerCase() !== word.toLowerCase(); })[0] || word;
+      const message = hintGiven ? "Not quite, look again!" : "Which word is the clue?";
+      return { message: message, display_sentence: sentence, input_type: "reverse_clue", options: pickOptionsFromTokens(tokens, clueToken, 4), word_tiles: null, correct_answer: clueToken, sentence_starter: null, stage: 3, grading_reasoning: null, hint_given: hintGiven, resolved: false, fun_fact: null };
     }
 
-    const hintText = w.hint || buildContextualHint(word, allMsgs);
-
-    if (isFirstTurn) {
-      const distractors = pickDistinct(w.distractors, 3, null);
-      const options = [w.meaning].concat(distractors).sort(function () { return Math.random() - 0.5; });
-      return { message: pickOne(INTRO_TEMPLATES)(word), display_sentence: "The passage uses \"" + word + "\" — read the sentence carefully.", input_type: "mcq", options: options, word_tiles: null, correct_answer: w.meaning, sentence_starter: null, stage: 1, grading_reasoning: null, hint_given: false, resolved: false, fun_fact: null };
+    // Stage 4: finish the sentence. Grading is generous, same as the real
+    // coach's own CORRECTNESS rule -- any attempt that actually uses the
+    // target word is accepted (missingWordFact is the one thing checked
+    // deterministically client-side either way).
+    if (stage === 4) {
+      // Never resolved here -- see the progression comment above, Stage 4
+      // always advances to Stage 5 on success rather than ending early.
+      const message = hintGiven ? "Try finishing the sentence again!" : "Finish this sentence!";
+      return { message: message, display_sentence: groundedSentence, input_type: "text", options: null, word_tiles: null, correct_answer: null, sentence_starter: "The " + word + " was very", stage: 4, grading_reasoning: null, hint_given: hintGiven, resolved: false, fun_fact: null };
     }
 
-    if (wasCorrect) {
-      // Stage reflects whether a hint was needed earlier in THIS word's
-      // exchange, not a fixed number -- the diagnostic engine classifies
-      // "struggled" words by finalStage>=4 || hintsUsed>0, so a hardcoded
-      // stage here would silently contradict the At A Glance panel.
-      const neededHint = /Not quite!|Close, but not quite|Almost! Here's a clue/.test(allMsgs);
-      return { message: pickOne(RESOLVED_TEMPLATES)(word, w.meaning.toLowerCase()), display_sentence: "The passage uses \"" + word + "\" — read the sentence carefully.", input_type: "mcq", options: [w.meaning].concat(pickDistinct(w.distractors, 3, null)), word_tiles: null, correct_answer: w.meaning, sentence_starter: null, stage: neededHint ? 2 : 1, grading_reasoning: null, hint_given: false, resolved: true, fun_fact: "Great context-clue reading!" };
+    // Stage 5: write an original sentence, no scaffolding.
+    if (resolved) {
+      return { message: pickOne(FINAL_RESOLVED_TEMPLATES)(word), display_sentence: groundedSentence, input_type: "text", options: null, word_tiles: null, correct_answer: null, sentence_starter: null, stage: 5, grading_reasoning: null, hint_given: false, resolved: true, fun_fact: "Great context-clue reading!" };
     }
-
-    // Wrong (or unrecognized) answer — give the real hint, stay at Stage 1.
-    const distractors2 = pickDistinct(w.distractors, 3, null);
-    const options2 = [w.meaning].concat(distractors2).sort(function () { return Math.random() - 0.5; });
-    return { message: pickOne(WRONG_WRAPPERS)(hintText), display_sentence: "The passage uses \"" + word + "\" — read the sentence carefully.", input_type: "mcq", options: options2, word_tiles: null, correct_answer: w.meaning, sentence_starter: null, stage: 1, grading_reasoning: null, hint_given: true, resolved: false, fun_fact: null };
+    const message = hintGiven ? "Try writing your own sentence with \"" + word + "\" again!" : "Now write your own sentence with \"" + word + "\"!";
+    return { message: message, display_sentence: groundedSentence, input_type: "text", options: null, word_tiles: null, correct_answer: null, sentence_starter: null, stage: 5, grading_reasoning: null, hint_given: hintGiven, resolved: false, fun_fact: null };
   }
 
   return { message: "OK", display_sentence: "OK", input_type: "text", options: null, word_tiles: null, correct_answer: null, sentence_starter: null, stage: 1, hint_given: false, resolved: true, fun_fact: null };
