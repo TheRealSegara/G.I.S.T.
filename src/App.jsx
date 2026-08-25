@@ -14,6 +14,7 @@ import {
   LEVEL_MAKER_SYSTEM_PROMPT,
   DIAGNOSTIC_SYSTEM_PROMPT,
 } from "../shared/prompts.js";
+import { mockClaude } from "../scripts/mock-backend-logic.mjs";
 
 /* ---------------- Fonts ---------------- */
 const FontImport = () => (
@@ -863,6 +864,31 @@ function useQuotaStatus() {
   return status; // null (unknown yet) | { date, used, limit }
 }
 
+/* ---------------- Demo Mode (presenter-only, in-app scripted responses) ---------------- */
+// For a live judged demo where every coach turn is otherwise a real Groq
+// call: swaps every /api/claude call for the same deterministic, instant
+// mock logic that already powers the offline rehearsal build
+// (scripts/mock-backend-logic.mjs), so a pitch never stalls on real AI
+// latency. Session-only, in-memory, never persisted -- a presenter switches
+// it on right before demoing and it must never silently survive into a
+// real classroom session on the same device.
+let demoModeOn = false;
+const demoModeListeners = new Set();
+
+function setDemoMode(on) {
+  demoModeOn = on;
+  demoModeListeners.forEach((fn) => fn(on));
+}
+
+function useDemoMode() {
+  const [on, setOn] = useState(demoModeOn);
+  useEffect(() => {
+    demoModeListeners.add(setOn);
+    return () => demoModeListeners.delete(setOn);
+  }, []);
+  return on;
+}
+
 /* ---------------- API helper ---------------- */
 // promptId + params (rather than a built system-prompt string) is what
 // actually goes over the wire — the server owns building the real prompt
@@ -873,6 +899,12 @@ function useQuotaStatus() {
 // every prompt except "coach", which needs { companionId, stage1Type,
 // stage2Type, stage3Type }.
 async function callClaude(promptId, params, messages, maxTokens = 1000) {
+  if (demoModeOn) {
+    // Same mock logic the offline rehearsal build runs on, called directly
+    // in-process instead of over a fetch -- no network round trip, no
+    // quota, no retry path ever exercised.
+    return JSON.stringify(mockClaude(promptId, messages));
+  }
   const response = await fetch("/api/claude", {
     method: "POST",
     headers: {
@@ -1424,6 +1456,7 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, onViewDemoR
   // better to let a session start than block on missing information we
   // have no way to obtain otherwise.
   const quotaStatus = useQuotaStatus();
+  const demoModeActive = useDemoMode();
   const canAffordSession =
     !quotaStatus || quotaStatus.limit == null || quotaStatus.limit - quotaStatus.used >= SESSION_COST_ESTIMATE;
 
@@ -1662,6 +1695,27 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, onViewDemoR
                   </button>
                 )}
               </div>
+              <button
+                onClick={() => { SFX.tap(); setDemoMode(!demoModeActive); }}
+                role="switch"
+                aria-checked={demoModeActive}
+                title="For live presentations: instant scripted coach responses instead of a real (slower) AI call. Say out loud that you're using it — it's meant to be disclosed, not hidden."
+                className="flex items-center gap-2 mt-3 rounded-full pl-1.5 pr-3 py-1.5 border-2"
+                style={{ borderColor: demoModeActive ? "#7c3aed" : "#d6d3d1", background: demoModeActive ? "#ede9fe" : "white" }}
+              >
+                <span
+                  className="relative w-8 h-4.5 rounded-full transition-colors shrink-0"
+                  style={{ background: demoModeActive ? "#7c3aed" : "#d6d3d1", width: "32px", height: "18px" }}
+                >
+                  <span
+                    className="absolute top-0.5 w-3.5 h-3.5 bg-white rounded-full transition-transform"
+                    style={{ left: "2px", transform: demoModeActive ? "translateX(14px)" : "translateX(0)" }}
+                  />
+                </span>
+                <span className="font-display font-700 text-xs" style={{ color: demoModeActive ? "#5b21b6" : "#78716c" }}>
+                  🎬 Demo Mode {demoModeActive ? "ON — instant scripted replies" : "(for presentations)"}
+                </span>
+              </button>
             </div>
           </div>
         </div>
@@ -3711,9 +3765,19 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onBack
     </button>
   );
 
+  const demoModeActive = useDemoMode();
+
   return (
     <div className="flex flex-col overflow-hidden" style={{ height: "100dvh" }}>
       <div className="max-w-4xl mx-auto w-full px-5 pt-6 pb-3 flex-1 flex flex-col min-h-0 step-in">
+        {demoModeActive && (
+          <p
+            className="shrink-0 mb-2 px-3 py-1.5 rounded-full text-center font-display font-800 text-xs"
+            style={{ background: "#ede9fe", border: "2px solid #7c3aed", color: "#5b21b6" }}
+          >
+            🎬 DEMO MODE — instant scripted replies, not a live AI call
+          </p>
+        )}
         {/* Header card */}
         <div className="relative bg-white p-3 pl-14 mb-3 shrink-0" style={CARD_GOLD}>
           {wordDone && <Sparkle count={10} />}
@@ -5160,6 +5224,7 @@ function DiagnosticReportSkeleton() {
 }
 
 function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log, onBack, onReset, sessionStartedAt, comprehensionResult, isDemo = false, initialSummary = null, onDiagnosticGenerated = null, hideResetSection = false }) {
+  const demoModeActive = useDemoMode();
   const [summary, setSummary] = useState(initialSummary);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -5359,6 +5424,15 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
           <span className="text-xl">🔦</span>
           <p className="font-body text-sm text-amber-900">
             <strong>This is a sample report</strong> with made-up data, showing what a real diagnostic looks like. No student actually played this session.
+          </p>
+        </div>
+      )}
+
+      {demoModeActive && (
+        <div className="mb-5 px-4 py-3 rounded-2xl relative z-10 step-in flex items-center gap-2" style={{ background: "#ede9fe", border: "3px solid #7c3aed" }}>
+          <span className="text-xl">🎬</span>
+          <p className="font-body text-sm" style={{ color: "#5b21b6" }}>
+            <strong>Demo Mode is on.</strong> Any new report generated now uses instant scripted replies, not a live AI call.
           </p>
         </div>
       )}
