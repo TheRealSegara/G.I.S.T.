@@ -22,7 +22,7 @@ const LOG_ENTRY_ALLOWED_KEYS = [
   "word", "clueType", "concreteness", "finalStage", "hintsUsed", "skipped", "skipReason", "revealedMeaning",
   "priorKnowledge", "gotItVia", "clueIdentified", "transferPassed", "timeToAnswerSec", "minGateSec", "solvedAt", "passageTitle", "funFact",
 ];
-const PATCH_ALLOWED_KEYS = ["sessionId", "diagnosticReport"];
+const PATCH_ALLOWED_KEYS = ["sessionId", "diagnosticReport", "teacherNotes"];
 
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_REQUESTS = 30;
@@ -255,12 +255,23 @@ async function handlePatch(req, res, claims) {
   if (!isPlainObjectWithOnlyKeys(req.body, PATCH_ALLOWED_KEYS)) {
     return res.status(400).json({ error: "Missing or unexpected fields in request body" });
   }
-  const { sessionId, diagnosticReport } = req.body;
+  const { sessionId, diagnosticReport, teacherNotes } = req.body;
   if (typeof sessionId !== "string" || !sessionId) {
     return res.status(400).json({ error: "Missing sessionId" });
   }
-  if (!diagnosticReport || typeof diagnosticReport !== "object" || Array.isArray(diagnosticReport)) {
+  const hasDiagnosticReport = diagnosticReport !== undefined;
+  const hasTeacherNotes = teacherNotes !== undefined;
+  if (!hasDiagnosticReport && !hasTeacherNotes) {
+    return res.status(400).json({ error: "Nothing to update" });
+  }
+  if (hasDiagnosticReport && (!diagnosticReport || typeof diagnosticReport !== "object" || Array.isArray(diagnosticReport))) {
     return res.status(400).json({ error: "Invalid diagnostic report" });
+  }
+  // Teacher's own follow-up note (e.g. "tried the suggested activity,
+  // it helped") -- same free-text ceiling as the AI's own short-text
+  // fields (funFact/revealedMeaning) elsewhere in this file.
+  if (hasTeacherNotes && teacherNotes !== null && !isValidShortString(teacherNotes, MAX_FREE_TEXT)) {
+    return res.status(400).json({ error: "Invalid teacher notes" });
   }
 
   const supabase = getSupabase();
@@ -277,12 +288,12 @@ async function handlePatch(req, res, claims) {
     return res.status(404).json({ error: "Session not found" });
   }
 
-  const { error: updateError } = await supabase
-    .from("sessions")
-    .update({ diagnostic_report: diagnosticReport })
-    .eq("id", sessionId);
+  const update = {};
+  if (hasDiagnosticReport) update.diagnostic_report = diagnosticReport;
+  if (hasTeacherNotes) update.teacher_notes = teacherNotes;
+  const { error: updateError } = await supabase.from("sessions").update(update).eq("id", sessionId);
   if (updateError) {
-    return res.status(502).json({ error: "Couldn't cache the diagnostic report" });
+    return res.status(502).json({ error: "Couldn't save that, please try again" });
   }
   return res.status(200).json({ ok: true });
 }

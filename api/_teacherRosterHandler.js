@@ -61,6 +61,17 @@ function computeStatsBreakdown(words) {
   return { total: words.length, independent, withHelp, skipped, breakdown };
 }
 
+// Server-side mirror of weakestClueType in src/App.jsx (same minTotal
+// floor, same "one unlucky word isn't a pattern" reasoning) -- used here
+// to flag, per student, which clue type has needed the most help across
+// their whole history, so the roster can group students who share the
+// same gap (see the "Shared Patterns" callout in FileBoxScreen).
+function weakestClueType(breakdown, minTotal = 2) {
+  const eligible = (breakdown || []).filter((b) => b.total >= minTotal);
+  if (eligible.length === 0) return null;
+  return eligible.reduce((worst, b) => (b.independent / b.total < worst.independent / worst.total ? b : worst));
+}
+
 function normalizeClassName(name) {
   return typeof name === "string" ? name.trim() : "";
 }
@@ -96,14 +107,20 @@ async function fetchRoster(supabase, label, res, classId) {
   const allWords = [];
   const roster = students.map((s) => {
     const finishedSessions = (s.sessions || []).filter((sess) => sess.finished_at);
+    const ownWords = finishedSessions.flatMap((sess) => sess.session_words || []);
     if (finishedSessions.length > 0) {
       contributingStudents += 1;
-      for (const sess of finishedSessions) allWords.push(...(sess.session_words || []));
+      allWords.push(...ownWords);
     }
     const lastSessionAt = finishedSessions.reduce(
       (latest, sess) => (!latest || sess.finished_at > latest ? sess.finished_at : latest),
       null
     );
+    // This student's own weakest clue type (distinct from classStats'
+    // pooled-across-everyone breakdown below) -- lets the roster group
+    // students who share the same gap into a "consider a small group"
+    // callout, see FileBoxScreen.
+    const weakest = weakestClueType(computeStatsBreakdown(ownWords).breakdown);
     return {
       id: s.id,
       fullName: s.full_name,
@@ -112,10 +129,49 @@ async function fetchRoster(supabase, label, res, classId) {
       classId: s.class_id,
       sessionCount: finishedSessions.length,
       lastSessionAt,
+      weakestClueType: weakest ? { type: weakest.type, independent: weakest.independent, total: weakest.total } : null,
     };
   });
   const classStats = { ...computeStatsBreakdown(allWords), studentCount: contributingStudents };
   return res.status(200).json({ students: roster, classStats, classes: classes || [] });
+}
+
+// Across every word this student has EVER been asked "have you seen this
+// before" (prior_knowledge), how often their self-report didn't match
+// what actually happened: claimed they already knew a word but then
+// needed a hint or couldn't do it at all (overconfidence), or claimed it
+// was new but later said they'd actually known it all along
+// (contradiction, got_it_via "knew" despite prior_knowledge "no"). A
+// persistent, deterministic signal about how much to trust THIS
+// student's own self-reports in future sessions -- distinct from
+// howReliable in the AI report, which only judges one session at a time.
+function computeCalibration(words) {
+  const withPriorKnowledge = words.filter((w) => w.prior_knowledge);
+  const overconfidence = withPriorKnowledge.filter((w) => w.prior_knowledge === "yes" && (w.skipped || w.hints_used > 0)).length;
+  const contradictions = withPriorKnowledge.filter((w) => w.prior_knowledge === "no" && w.got_it_via === "knew").length;
+  return { overconfidence, contradictions, sampleSize: withPriorKnowledge.length };
+}
+
+// Every past encounter of every word this student has ever logged,
+// keyed by the lowercased word -- lets a new session's report say "this
+// is the second time 'resilient' has come up" (real evidence of
+// retention, not just a single session's snapshot) and lets the
+// Recommended Next Words card avoid re-suggesting a word they've
+// already solved. Sorted oldest-first per word.
+function buildWordHistory(sessionsWithWords) {
+  const history = {};
+  for (const sess of sessionsWithWords) {
+    for (const w of sess.session_words || []) {
+      const key = String(w.word || "").trim().toLowerCase();
+      if (!key) continue;
+      if (!history[key]) history[key] = [];
+      history[key].push({ sessionId: sess.id, finalStage: w.final_stage, hintsUsed: w.hints_used, skipped: w.skipped, solvedAt: w.solved_at });
+    }
+  }
+  for (const key of Object.keys(history)) {
+    history[key].sort((a, b) => new Date(a.solvedAt) - new Date(b.solvedAt));
+  }
+  return history;
 }
 
 async function fetchStudentSessions(supabase, label, studentId, res) {
@@ -130,7 +186,7 @@ async function fetchStudentSessions(supabase, label, studentId, res) {
 
   const { data: sessions, error: sessionsError } = await supabase
     .from("sessions")
-    .select("id, passage_title, passage_emoji, started_at, finished_at, comprehension_result, session_words(id, clue_type, hints_used, skipped)")
+    .select("id, passage_title, passage_emoji, started_at, finished_at, comprehension_result, teacher_notes, session_words(id, word, clue_type, hints_used, skipped, final_stage, solved_at, prior_knowledge, got_it_via)")
     .eq("student_id", studentId)
     .order("started_at", { ascending: false });
   if (sessionsError) {
@@ -138,23 +194,33 @@ async function fetchStudentSessions(supabase, label, studentId, res) {
   }
 
   const finishedSessions = sessions.filter((s) => s.finished_at);
+  const allWords = finishedSessions.flatMap((s) => s.session_words || []);
   const studentStats = {
-    ...computeStatsBreakdown(finishedSessions.flatMap((s) => s.session_words || [])),
+    ...computeStatsBreakdown(allWords),
     sessionCount: finishedSessions.length,
   };
 
   return res.status(200).json({
     student: { id: student.id, fullName: student.full_name },
-    sessions: finishedSessions.map((s) => ({
-      id: s.id,
-      passageTitle: s.passage_title,
-      passageEmoji: s.passage_emoji,
-      startedAt: s.started_at,
-      finishedAt: s.finished_at,
-      wordCount: (s.session_words || []).length,
-      comprehensionCorrect: s.comprehension_result?.correct ?? null,
-    })),
+    sessions: finishedSessions.map((s) => {
+      const words = s.session_words || [];
+      const solved = words.filter((w) => !w.skipped);
+      return {
+        id: s.id,
+        passageTitle: s.passage_title,
+        passageEmoji: s.passage_emoji,
+        startedAt: s.started_at,
+        finishedAt: s.finished_at,
+        wordCount: words.length,
+        comprehensionCorrect: s.comprehension_result?.correct ?? null,
+        teacherNotes: s.teacher_notes,
+        independentCount: solved.filter((w) => w.hints_used === 0).length,
+        totalCount: solved.length,
+      };
+    }),
     studentStats,
+    wordHistory: buildWordHistory(finishedSessions),
+    calibration: computeCalibration(allWords),
   });
 }
 

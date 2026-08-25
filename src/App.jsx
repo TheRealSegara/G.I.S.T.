@@ -1033,6 +1033,15 @@ async function cacheSessionDiagnostic(sessionId, diagnosticReport) {
   return apiRequest("/api/session", { method: "PATCH", token: currentAuthToken, body: { sessionId, diagnosticReport } });
 }
 
+// A teacher's own follow-up note on one specific session -- e.g. "tried
+// the suggested activity next lesson, it helped" -- so the NEXT session's
+// report for the same student can show what was tried last time and
+// whether it worked, closing the loop instead of "whatToTry" being a
+// one-shot suggestion nobody ever revisits.
+async function saveTeacherNotes(sessionId, teacherNotes) {
+  return apiRequest("/api/session", { method: "PATCH", token: currentAuthToken, body: { sessionId, teacherNotes } });
+}
+
 // Permanently deletes one session (and its word log, via the DB's own
 // cascade) — for a teacher pruning a single bad/test session without
 // touching the rest of that student's history.
@@ -4729,6 +4738,29 @@ function computeAtAGlance(log) {
   return { total: log.length, independent, withHelp, skipped, breakdown };
 }
 
+// Deterministic High/Medium/Low tag for how much to trust THIS session's
+// correct answers, so a teacher triaging several reports can skim badges
+// before reading any prose. Built from the same concrete signals the
+// AI's own "howReliable" section already reasons about in words --
+// answers that landed at the pacing-gate floor (essentially guess-speed
+// clicks, see answeredAtGateFloor) and self-report mismatches (claimed
+// new but said "I already knew it" afterward, or claimed already known
+// but still needed a hint). Purely a count, no AI, same trust boundary
+// as computeAtAGlance.
+function computeConfidenceBadge(log) {
+  const solved = log.filter((e) => !e.skipped);
+  const guessSignals = solved.filter((e) => answeredAtGateFloor(e)).length;
+  const mismatchSignals = solved.filter(
+    (e) => (e.priorKnowledge === "no" && e.gotItVia === "knew") || (e.priorKnowledge === "yes" && e.hintsUsed > 0)
+  ).length;
+  const skippedCount = log.filter((e) => e.skipped).length;
+  const totalSignals = guessSignals + mismatchSignals;
+  let level = "High";
+  if (totalSignals >= 2 || skippedCount >= 2) level = "Low";
+  else if (totalSignals >= 1 || skippedCount >= 1) level = "Medium";
+  return { level, guessSignals, mismatchSignals, skippedCount };
+}
+
 const SAMPLE_LOG = [
   { word: "brave", clueType: "contrast", concreteness: "abstract", finalStage: 2, hintsUsed: 0, skipped: false, priorKnowledge: "no", gotItVia: "clues", clueIdentified: "but she says they are", transferPassed: null, timeToAnswerSec: 18, passageTitle: "Pet Show Day", solvedAt: Date.now() - 500000 },
   { word: "camouflage", clueType: "definition", concreteness: "abstract", finalStage: 4, hintsUsed: 1, skipped: false, priorKnowledge: "not_sure", gotItVia: "clues", clueIdentified: "helps them hide from enemies", transferPassed: true, timeToAnswerSec: 35, passageTitle: "Pet Show Day", solvedAt: Date.now() - 400000 },
@@ -5127,27 +5159,72 @@ function DiagnosticReportSkeleton() {
   );
 }
 
-function TeacherScreen({ studentId, realStudentId = null, log, onBack, onReset, sessionStartedAt, comprehensionResult, isDemo = false, initialSummary = null, onDiagnosticGenerated = null, hideResetSection = false }) {
+function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log, onBack, onReset, sessionStartedAt, comprehensionResult, isDemo = false, initialSummary = null, onDiagnosticGenerated = null, hideResetSection = false }) {
   const [summary, setSummary] = useState(initialSummary);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [showHelp, setShowHelp] = useState(false);
   const [showFullDetails, setShowFullDetails] = useState(false);
   const [downloading, setDownloading] = useState(false);
-  // Cross-session pattern (item 1) and growth-vs-history (item 3): both
-  // deterministic, both need this student's stats pooled across every
+  // Cross-session pattern, growth-vs-history, word-retention (item 1),
+  // metacognitive calibration (item 9), and the "recommended next words"
+  // card (item 7) all need this student's history pooled across every
   // session they've ever finished, not just the one being viewed here.
   // realStudentId is the real DB student UUID, only available for a real,
   // signed-in student (the sample report has none, isDemo covers that).
   const [studentStats, setStudentStats] = useState(null);
+  const [pastSessions, setPastSessions] = useState(null);
+  const [wordHistory, setWordHistory] = useState(null);
+  const [calibration, setCalibration] = useState(null);
   useEffect(() => {
     if (!realStudentId || isDemo) return;
     let cancelled = false;
     fetchStudentSessions(realStudentId)
-      .then((data) => { if (!cancelled) setStudentStats(data.studentStats || null); })
+      .then((data) => {
+        if (cancelled) return;
+        setStudentStats(data.studentStats || null);
+        setPastSessions(data.sessions || null);
+        setWordHistory(data.wordHistory || null);
+        setCalibration(data.calibration || null);
+      })
       .catch(() => { /* silent: this is a bonus callout, not core report functionality */ });
     return () => { cancelled = true; };
   }, [realStudentId, isDemo]);
+
+  // Closing the loop on "whatToTry" (item 5): the most recent PRIOR
+  // session (strictly before this one, if this one is even in the list
+  // yet) and what its report suggested, plus a small box to log whether
+  // it worked -- only possible once we have both a sessionId to save
+  // against and a prior session to reference.
+  const [previousSession, setPreviousSession] = useState(null);
+  useEffect(() => {
+    if (!pastSessions || !sessionId) { setPreviousSession(null); return; }
+    const prior = pastSessions.find((s) => s.id !== sessionId);
+    if (!prior) { setPreviousSession(null); return; }
+    let cancelled = false;
+    fetchSessionDetail(prior.id)
+      .then((data) => {
+        if (cancelled) return;
+        const whatToTry = data?.session?.diagnosticReport?.whatToTry;
+        if (whatToTry) setPreviousSession({ id: prior.id, whatToTry, existingNotes: data.session.teacherNotes || "" });
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [pastSessions, sessionId]);
+  const [followUpNote, setFollowUpNote] = useState("");
+  const [followUpSaved, setFollowUpSaved] = useState(false);
+  const [followUpSaving, setFollowUpSaving] = useState(false);
+  useEffect(() => { setFollowUpNote(previousSession?.existingNotes || ""); setFollowUpSaved(false); }, [previousSession?.id]);
+  async function handleSaveFollowUp() {
+    if (!sessionId || followUpSaving) return;
+    setFollowUpSaving(true);
+    try {
+      await saveTeacherNotes(sessionId, followUpNote.trim());
+      setFollowUpSaved(true);
+    } catch (e) { /* best-effort, same philosophy as the rest of this bonus panel */ }
+    setFollowUpSaving(false);
+  }
+
   const [teacherNotes, setTeacherNotes] = useState("");
   const quotaStatus = useQuotaStatus();
 
@@ -5316,6 +5393,28 @@ function TeacherScreen({ studentId, realStudentId = null, log, onBack, onReset, 
           <div className="p-7 rounded-3xl text-center bounce-in" style={{ background: "linear-gradient(135deg,#ccfbf1,#99f6e4)", border: "4px solid #0d9488", boxShadow: CARD_SHADOW_HERO }}>
             <p className="font-display font-800 text-xs uppercase tracking-wide text-teal-800 mb-2">📌 Summary</p>
             <p className="font-display font-800 text-xl sm:text-2xl leading-snug text-teal-950">{summary.summary || summary.corePattern || summary.coreProblem}</p>
+            {(() => {
+              // Deterministic confidence badge (item 4): lets a teacher
+              // triaging several reports skim badges before reading any
+              // prose, same underlying signals the AI's own "How Reliable"
+              // section discusses in words -- see computeConfidenceBadge.
+              const badge = computeConfidenceBadge(log);
+              const tone =
+                badge.level === "High"
+                  ? { bg: "#d1fae5", border: "#059669", text: "#065f46" }
+                  : badge.level === "Medium"
+                  ? { bg: "#fef3c7", border: "#d97706", text: "#92400e" }
+                  : { bg: "#fee2e2", border: "#dc2626", text: "#991b1b" };
+              return (
+                <p
+                  className="inline-flex items-center gap-1.5 mt-3 px-3 py-1.5 rounded-full font-display font-800 text-xs"
+                  style={{ background: tone.bg, border: `2px solid ${tone.border}`, color: tone.text }}
+                  title="How much to trust this session's correct answers, based on guess-speed answers and self-report mismatches"
+                >
+                  🔒 {badge.level} confidence
+                </p>
+              );
+            })()}
           </div>
 
           {/* Legend: always visible (not gated behind "See full details"),
@@ -5326,6 +5425,40 @@ function TeacherScreen({ studentId, realStudentId = null, log, onBack, onReset, 
             <span className="flex items-center gap-1.5"><i className="inline-block w-3.5 h-3.5 rounded" style={{ background: "#fef3c7", border: "2px solid #d97706" }} /> AI-analyzed</span>
             <span className="flex items-center gap-1.5"><i className="inline-block w-3.5 h-3.5 rounded" style={{ background: "#fee2e2", border: "2px solid #dc2626" }} /> Headline diagnosis</span>
           </div>
+
+          {/* Closing the loop on "whatToTry" (item 5): what the PREVIOUS
+              session suggested, plus a place to log whether it worked --
+              only shown when there's a real prior session to reference. */}
+          {previousSession && (
+            <div className="p-5 rounded-3xl" style={{ background: "#ede9fe", border: "3px solid #7c3aed" }}>
+              <p className="font-display font-800 text-xs uppercase tracking-wide text-violet-800 mb-2">📝 Last Time We Tried</p>
+              <BoldText text={previousSession.whatToTry} className="font-body text-sm leading-relaxed text-violet-900 mb-3" />
+              {sessionId ? (
+                <div>
+                  <label className="font-display font-700 text-xs uppercase tracking-wide text-violet-700 block mb-1.5">Did it help?</label>
+                  <textarea
+                    value={followUpNote}
+                    onChange={(e) => { setFollowUpNote(e.target.value); setFollowUpSaved(false); }}
+                    placeholder="e.g. tried the suggested activity, noticeably more confident with contrast clues now"
+                    rows={2}
+                    className="w-full bg-white rounded-2xl border-2 border-violet-300 px-3 py-2 font-body text-sm text-stone-700 focus:outline-none focus:border-violet-500"
+                  />
+                  <div className="flex items-center gap-2 mt-2">
+                    <button
+                      onClick={handleSaveFollowUp}
+                      disabled={followUpSaving}
+                      className="font-display font-700 text-xs text-white bg-violet-600 rounded-full px-4 py-1.5 disabled:opacity-40"
+                    >
+                      {followUpSaving ? "Saving…" : "Save"}
+                    </button>
+                    {followUpSaved && <span className="font-body text-xs text-violet-700">✅ Saved</span>}
+                  </div>
+                </div>
+              ) : (
+                <p className="font-body text-xs text-violet-600">Reopen this session from the File Box to log a follow-up note.</p>
+              )}
+            </div>
+          )}
 
           {/* At a Glance / Story Understanding: plain counts, not prose,
               so these stay visible by default even with details collapsed. */}
@@ -5351,6 +5484,30 @@ function TeacherScreen({ studentId, realStudentId = null, log, onBack, onReset, 
                   ))}
                 </div>
               )}
+              {wordHistory && (() => {
+                // Word-retention (item 1): real evidence of growth over
+                // time -- a repeat word this session that landed at an
+                // easier stage / fewer hints than its last encounter is a
+                // much stronger signal than a single session's snapshot.
+                const repeats = log
+                  .map((e) => {
+                    const key = e.word.toLowerCase();
+                    const prior = (wordHistory[key] || []).filter((h) => new Date(h.solvedAt) < new Date(e.solvedAt));
+                    return prior.length > 0 ? { word: e.word, count: prior.length, last: prior[prior.length - 1] } : null;
+                  })
+                  .filter(Boolean);
+                if (repeats.length === 0) return null;
+                return (
+                  <div className="mt-3 pt-3 border-t border-blue-200 space-y-1">
+                    <p className="text-xs font-display font-700 text-blue-800">🔁 Seen before</p>
+                    {repeats.map((r) => (
+                      <p key={r.word} className="text-xs font-body text-blue-700">
+                        <b>{r.word}</b> — {r.count === 1 ? "1 earlier attempt" : `${r.count} earlier attempts`}, last time {r.last.skipped ? "skipped" : `reached Stage ${r.last.finalStage} with ${r.last.hintsUsed} hint${r.last.hintsUsed === 1 ? "" : "s"}`}.
+                      </p>
+                    ))}
+                  </div>
+                );
+              })()}
             </div>
 
             <div className="p-5 rounded-3xl" style={{ background: "#dbeafe", border: "3px solid #2563eb" }}>
@@ -5370,7 +5527,11 @@ function TeacherScreen({ studentId, realStudentId = null, log, onBack, onReset, 
             const weakest = weakestClueType(studentStats.breakdown);
             return (
               <div className="p-5 rounded-3xl" style={{ background: "#dbeafe", border: "3px solid #2563eb" }}>
-                <p className="font-display font-800 text-xs uppercase tracking-wide text-blue-800 mb-2">📈 Compared To Their Own History</p>
+                {/* Item 6: a persistent skill profile, not just this one
+                    session's ~5-word sample -- the full per-clue-type
+                    breakdown pooled across every session this student has
+                    ever finished, not just the single weakest line. */}
+                <p className="font-display font-800 text-xs uppercase tracking-wide text-blue-800 mb-2">📈 Their Skill Profile (All-Time)</p>
                 <p className="font-body text-sm text-blue-900 leading-relaxed">
                   {sessionRate !== null && overallRate !== null && (
                     <>This session: <b>{sessionRate}%</b> solved independently, vs an overall average of <b>{overallRate}%</b> across their {studentStats.sessionCount} tracked sessions. </>
@@ -5379,7 +5540,64 @@ function TeacherScreen({ studentId, realStudentId = null, log, onBack, onReset, 
                     <><b className="capitalize">{weakest.type}</b>-clue words have needed the most help across their history — {weakest.independent}/{weakest.total} independent.</>
                   )}
                 </p>
+                {studentStats.breakdown.length > 0 && (
+                  <div className="mt-3 pt-3 border-t border-blue-200 space-y-1">
+                    {studentStats.breakdown.map((b) => (
+                      <div key={b.type} className="flex justify-between text-xs font-body text-blue-800 capitalize">
+                        <span>{b.type} clues (all-time)</span><span>{b.independent}/{b.total} independent</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {/* Item 9: metacognitive calibration -- how well this
+                    student's own self-reports have matched what actually
+                    happened, tracked persistently rather than flagged
+                    once per session. Needs a real sample before saying
+                    anything, same thin-data caution as the rest of the app. */}
+                {calibration && calibration.sampleSize >= 5 && (calibration.overconfidence > 0 || calibration.contradictions > 0) && (
+                  <p className="mt-3 pt-3 border-t border-blue-200 text-xs font-body text-blue-800">
+                    🤔 Self-awareness: {calibration.overconfidence >= calibration.contradictions
+                      ? `tends to overestimate what they already know (${calibration.overconfidence} of ${calibration.sampleSize} tracked words needed help despite saying they already knew it)`
+                      : `sometimes says a word is new, then says afterward they already knew it (${calibration.contradictions} of ${calibration.sampleSize} tracked words)`}
+                  </p>
+                )}
                 <p className="font-body text-[11px] text-blue-600 mt-2">🔢 Counted directly from their logged sessions, not AI</p>
+              </div>
+            );
+          })()}
+
+          {studentStats && wordHistory && (() => {
+            // Item 7: diagnosis feeding forward into what to try next --
+            // scans the built-in map library (client-side, no AI) for
+            // words matching this student's weakest clue type that they
+            // haven't already encountered, so the report suggests a
+            // concrete next step instead of stopping at "here's the gap."
+            const weakest = weakestClueType(studentStats.breakdown);
+            if (!weakest) return null;
+            const seen = new Set(Object.keys(wordHistory));
+            const candidates = [];
+            for (const mapId of Object.keys(PASSAGES)) {
+              const p = PASSAGES[mapId];
+              for (const w of p.words) {
+                if (w.clueType === weakest.type && !seen.has(w.word.toLowerCase())) {
+                  candidates.push({ word: w.word, mapTitle: p.title, mapEmoji: p.emoji });
+                }
+              }
+            }
+            if (candidates.length === 0) return null;
+            const picks = candidates.slice(0, 3);
+            return (
+              <div className="p-5 rounded-3xl" style={{ background: "#dbeafe", border: "3px solid #2563eb" }}>
+                <p className="font-display font-800 text-xs uppercase tracking-wide text-blue-800 mb-2">🎯 Recommended Next Words</p>
+                <p className="font-body text-sm text-blue-900 mb-2">
+                  Since <b className="capitalize">{weakest.type}</b>-clue words have been their biggest gap, these unfamiliar words specifically test that skill:
+                </p>
+                <div className="space-y-1">
+                  {picks.map((c) => (
+                    <p key={c.word} className="font-body text-xs text-blue-800"><b>{c.word}</b> — {c.mapEmoji} {c.mapTitle}</p>
+                  ))}
+                </div>
+                <p className="font-body text-[11px] text-blue-600 mt-2">🔢 Picked from the built-in map library, not AI</p>
               </div>
             );
           })()}
@@ -5794,6 +6012,7 @@ function FileBoxScreen({ onBack }) {
         <TeacherScreen
           studentId={sessionDetail.session.studentName}
           realStudentId={sessionDetail.session.studentId}
+          sessionId={sessionDetail.session.id}
           log={sessionDetail.log}
           comprehensionResult={sessionDetail.session.comprehensionResult}
           sessionStartedAt={new Date(sessionDetail.session.startedAt).getTime()}
@@ -5839,6 +6058,37 @@ function FileBoxScreen({ onBack }) {
         {sessions && sessions.length === 0 && (
           <p className="font-body text-sm text-stone-500 relative z-10">No completed sessions yet for this student.</p>
         )}
+        {sessions && sessions.length >= 2 && (() => {
+          // Item 3: a trend, not just a snapshot -- independent-solve rate
+          // across every session, oldest to newest, so growth (or a
+          // slide) is visible at a glance instead of needing to mentally
+          // track it session to session. `sessions` comes back newest
+          // first from the API, so reverse for chronological order.
+          const chronological = [...sessions].reverse();
+          const rates = chronological.map((s) => (s.totalCount > 0 ? Math.round((s.independentCount / s.totalCount) * 100) : null));
+          const validRates = rates.filter((v) => v !== null);
+          if (validRates.length < 2) return null;
+          const w = 220, h = 56, pad = 8;
+          const withIndex = rates.map((v, i) => ({ v, i })).filter((p) => p.v !== null);
+          const stepX = withIndex.length > 1 ? (w - pad * 2) / (withIndex.length - 1) : 0;
+          const points = withIndex.map((p, idx) => ({
+            x: pad + idx * stepX,
+            y: pad + ((100 - p.v) / 100) * (h - pad * 2),
+          }));
+          return (
+            <div className="mb-4 p-4 rounded-2xl bg-white relative z-10" style={{ border: "3px solid #2563eb" }}>
+              <p className="font-display font-800 text-xs uppercase tracking-wide text-blue-800 mb-2">📈 Independent-Solve Rate Over Time</p>
+              <div className="flex items-center gap-3">
+                <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} className="shrink-0" aria-hidden="true">
+                  <polyline points={points.map((p) => `${p.x},${p.y}`).join(" ")} fill="none" stroke="#2563eb" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+                  {points.map((p, i) => <circle key={i} cx={p.x} cy={p.y} r="3" fill="#2563eb" />)}
+                </svg>
+                <p className="font-body text-xs text-blue-700">{validRates[0]}% → {validRates[validRates.length - 1]}% independent, across {validRates.length} sessions</p>
+              </div>
+              <p className="font-body text-[11px] text-blue-500 mt-1">🔢 Oldest to newest, left to right, counted not AI</p>
+            </div>
+          );
+        })()}
         <div className="flex flex-col gap-2.5 relative z-10">
           {sessions?.map((s) => (
             <div key={s.id} className="flex items-center gap-2">
@@ -5854,6 +6104,7 @@ function FileBoxScreen({ onBack }) {
                     {new Date(s.finishedAt).toLocaleDateString()} · {s.wordCount} word{s.wordCount === 1 ? "" : "s"}
                     {s.comprehensionCorrect !== null ? ` · comprehension ${s.comprehensionCorrect ? "✓" : "✗"}` : ""}
                   </p>
+                  {s.teacherNotes && <p className="font-body text-xs text-violet-600 mt-0.5">📝 {s.teacherNotes}</p>}
                 </div>
               </button>
               <button
@@ -6047,6 +6298,33 @@ function FileBoxScreen({ onBack }) {
           </div>
         );
       })()}
+      {roster && roster.length >= 2 && (() => {
+        // Items 2+8: turns the class-wide weakest-type stat above into an
+        // actual scheduling decision -- which SPECIFIC students share the
+        // same gap, grouped into a suggested small-group session, rather
+        // than just a class-wide percentage.
+        const groups = {};
+        for (const s of roster) {
+          if (!s.weakestClueType) continue;
+          const key = s.weakestClueType.type;
+          (groups[key] || (groups[key] = [])).push(s.fullName);
+        }
+        const sharedGroups = Object.entries(groups).filter(([, names]) => names.length >= 2);
+        if (sharedGroups.length === 0) return null;
+        return (
+          <div className="mb-4 p-5 rounded-3xl relative z-10 step-in" style={{ background: "#ede9fe", border: "3px solid #7c3aed" }}>
+            <p className="font-display font-800 text-xs uppercase tracking-wide text-violet-800 mb-2">🔍 Shared Patterns</p>
+            <div className="space-y-1.5">
+              {sharedGroups.map(([type, names]) => (
+                <p key={type} className="font-body text-sm text-violet-900">
+                  <b>{names.length} students</b> share a <b className="capitalize">{type}</b>-clue gap: {names.join(", ")} — consider a small group session.
+                </p>
+              ))}
+            </div>
+            <p className="font-body text-[11px] text-violet-600 mt-2">🔢 Counted directly from each student's logged history, not AI</p>
+          </div>
+        );
+      })()}
       {resetSuccessName && (
         <div
           className="flex items-center justify-between gap-2 mb-3 px-4 py-2.5 rounded-2xl bg-emerald-50 relative z-10"
@@ -6227,6 +6505,11 @@ export default function App() {
   const [transferWordId, setTransferWordId] = useState(null);
   const [activeWordCount, setActiveWordCount] = useState(null);
   const [comprehensionResult, setComprehensionResult] = useState(null);
+  // The just-saved session's real DB id, once saveSession() resolves --
+  // TeacherScreen needs this to save a teacher's follow-up note against
+  // the CORRECT session (see saveTeacherNotes), not available any other
+  // way in the live post-session flow.
+  const [savedSessionId, setSavedSessionId] = useState(null);
   const [log, setLog] = useState([]);
   const [solvedWords, setSolvedWords] = useState([]);
   const [activeWord, setActiveWord] = useState(null);
@@ -6515,7 +6798,7 @@ export default function App() {
                   finishedAt: Date.now(),
                   comprehensionResult: result,
                   log,
-                }).catch(() => {});
+                }).then((data) => setSavedSessionId(data?.sessionId || null)).catch(() => {});
               }
               setScreen("recap");
             }}
@@ -6531,7 +6814,7 @@ export default function App() {
           />
         )}
         {screen === "teacher" && (
-          <TeacherScreen studentId={studentId} realStudentId={studentAuth?.student?.id} log={log} onBack={() => setScreen("passage")} onReset={handleReset} sessionStartedAt={sessionStartedAt} comprehensionResult={comprehensionResult} />
+          <TeacherScreen studentId={studentId} realStudentId={studentAuth?.student?.id} sessionId={savedSessionId} log={log} onBack={() => setScreen("passage")} onReset={handleReset} sessionStartedAt={sessionStartedAt} comprehensionResult={comprehensionResult} />
         )}
       </main>
     </div>

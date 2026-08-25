@@ -130,7 +130,8 @@ app.patch("/api/session", (req, res) => {
   if (!claims || claims.kind === "student") return res.status(403).json({ error: "Teacher access required" });
   const session = sessions.find((s) => s.id === req.body.sessionId);
   if (!session) return res.status(404).json({ error: "Session not found" });
-  session.diagnosticReport = req.body.diagnosticReport;
+  if (req.body.diagnosticReport !== undefined) session.diagnosticReport = req.body.diagnosticReport;
+  if (req.body.teacherNotes !== undefined) session.teacherNotes = req.body.teacherNotes;
   return res.status(200).json({ ok: true });
 });
 
@@ -164,6 +165,36 @@ function computeStatsBreakdown(words) {
   return { total: words.length, independent, withHelp, skipped, breakdown };
 }
 
+// Mirrors weakestClueType in src/App.jsx / api/_teacherRosterHandler.js.
+function weakestClueType(breakdown, minTotal = 2) {
+  const eligible = (breakdown || []).filter((b) => b.total >= minTotal);
+  if (eligible.length === 0) return null;
+  return eligible.reduce((worst, b) => (b.independent / b.total < worst.independent / worst.total ? b : worst));
+}
+
+// Mirrors computeCalibration in api/_teacherRosterHandler.js.
+function computeCalibration(words) {
+  const withPriorKnowledge = words.filter((w) => w.priorKnowledge);
+  const overconfidence = withPriorKnowledge.filter((w) => w.priorKnowledge === "yes" && (w.skipped || w.hintsUsed > 0)).length;
+  const contradictions = withPriorKnowledge.filter((w) => w.priorKnowledge === "no" && w.gotItVia === "knew").length;
+  return { overconfidence, contradictions, sampleSize: withPriorKnowledge.length };
+}
+
+// Mirrors buildWordHistory in api/_teacherRosterHandler.js.
+function buildWordHistory(studentSessions) {
+  const history = {};
+  for (const sess of studentSessions) {
+    for (const w of sess.log || []) {
+      const key = String(w.word || "").trim().toLowerCase();
+      if (!key) continue;
+      if (!history[key]) history[key] = [];
+      history[key].push({ sessionId: sess.id, finalStage: w.finalStage, hintsUsed: w.hintsUsed, skipped: w.skipped, solvedAt: w.solvedAt });
+    }
+  }
+  for (const key of Object.keys(history)) history[key].sort((a, b) => new Date(a.solvedAt) - new Date(b.solvedAt));
+  return history;
+}
+
 app.get("/api/teacher-roster", (req, res) => {
   const authHeader = req.headers["authorization"] || "";
   const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
@@ -175,11 +206,29 @@ app.get("/api/teacher-roster", (req, res) => {
     const student = students.find((s) => s.id === studentId && s.label === claims.label);
     if (!student) return res.status(404).json({ error: "Student not found" });
     const studentSessions = sessions.filter((s) => s.studentId === studentId);
-    const studentStats = { ...computeStatsBreakdown(studentSessions.flatMap((s) => s.log || [])), sessionCount: studentSessions.length };
+    const allWords = studentSessions.flatMap((s) => s.log || []);
+    const studentStats = { ...computeStatsBreakdown(allWords), sessionCount: studentSessions.length };
     return res.status(200).json({
       student: { id: student.id, fullName: student.fullName },
-      sessions: studentSessions.map((s) => ({ id: s.id, passageTitle: s.passageTitle, passageEmoji: s.passageEmoji, startedAt: s.startedAt, finishedAt: s.finishedAt, wordCount: (s.log || []).length, comprehensionCorrect: s.comprehensionResult?.correct ?? null })),
+      sessions: studentSessions.map((s) => {
+        const words = s.log || [];
+        const solved = words.filter((w) => !w.skipped);
+        return {
+          id: s.id,
+          passageTitle: s.passageTitle,
+          passageEmoji: s.passageEmoji,
+          startedAt: s.startedAt,
+          finishedAt: s.finishedAt,
+          wordCount: words.length,
+          comprehensionCorrect: s.comprehensionResult?.correct ?? null,
+          teacherNotes: s.teacherNotes || null,
+          independentCount: solved.filter((w) => w.hintsUsed === 0).length,
+          totalCount: solved.length,
+        };
+      }),
       studentStats,
+      wordHistory: buildWordHistory(studentSessions),
+      calibration: computeCalibration(allWords),
     });
   }
 
@@ -194,12 +243,23 @@ app.get("/api/teacher-roster", (req, res) => {
   }
   const roster = scopedStudents.map((s) => {
     const studentSessions = sessions.filter((sess) => sess.studentId === s.id);
+    const ownWords = studentSessions.flatMap((sess) => sess.log || []);
     if (studentSessions.length > 0) {
       contributingStudents += 1;
-      for (const sess of studentSessions) allWords.push(...(sess.log || []));
+      allWords.push(...ownWords);
     }
     const lastSessionAt = studentSessions.reduce((latest, sess) => (!latest || sess.finishedAt > latest ? sess.finishedAt : latest), null);
-    return { id: s.id, fullName: s.fullName, createdAt: s.createdAt, lastLoginAt: s.lastLoginAt, classId: s.classId, sessionCount: studentSessions.length, lastSessionAt };
+    const weakest = weakestClueType(computeStatsBreakdown(ownWords).breakdown);
+    return {
+      id: s.id,
+      fullName: s.fullName,
+      createdAt: s.createdAt,
+      lastLoginAt: s.lastLoginAt,
+      classId: s.classId,
+      sessionCount: studentSessions.length,
+      lastSessionAt,
+      weakestClueType: weakest ? { type: weakest.type, independent: weakest.independent, total: weakest.total } : null,
+    };
   });
   const classStats = { ...computeStatsBreakdown(allWords), studentCount: contributingStudents };
   const teacherClasses = classes.filter((c) => c.label === claims.label).map((c) => ({ id: c.id, name: c.name }));

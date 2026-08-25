@@ -88,6 +88,33 @@ const mockScript = String.raw`
     }).filter(function (b) { return b.total > 0; });
     return { total: words.length, independent: independent, withHelp: withHelp, skipped: skipped, breakdown: breakdown };
   }
+  function weakestClueType(breakdown, minTotal) {
+    minTotal = minTotal || 2;
+    var eligible = (breakdown || []).filter(function (b) { return b.total >= minTotal; });
+    if (eligible.length === 0) return null;
+    return eligible.reduce(function (worst, b) { return b.independent / b.total < worst.independent / worst.total ? b : worst; });
+  }
+  function computeCalibration(words) {
+    var withPriorKnowledge = words.filter(function (w) { return w.priorKnowledge; });
+    var overconfidence = withPriorKnowledge.filter(function (w) { return w.priorKnowledge === "yes" && (w.skipped || w.hintsUsed > 0); }).length;
+    var contradictions = withPriorKnowledge.filter(function (w) { return w.priorKnowledge === "no" && w.gotItVia === "knew"; }).length;
+    return { overconfidence: overconfidence, contradictions: contradictions, sampleSize: withPriorKnowledge.length };
+  }
+  function buildWordHistory(studentSessions) {
+    var history = {};
+    studentSessions.forEach(function (sess) {
+      (sess.log || []).forEach(function (w) {
+        var key = String(w.word || "").trim().toLowerCase();
+        if (!key) return;
+        if (!history[key]) history[key] = [];
+        history[key].push({ sessionId: sess.id, finalStage: w.finalStage, hintsUsed: w.hintsUsed, skipped: w.skipped, solvedAt: w.solvedAt });
+      });
+    });
+    Object.keys(history).forEach(function (key) {
+      history[key].sort(function (a, b) { return new Date(a.solvedAt) - new Date(b.solvedAt); });
+    });
+    return history;
+  }
   function getClaims(headersInit) {
     var headers = new Headers(headersInit || {});
     var auth = headers.get("authorization") || headers.get("Authorization") || "";
@@ -195,7 +222,8 @@ const mockScript = String.raw`
           if (!claims5 || claims5.kind === "student") { resolve(jsonResponse(403, { error: "Teacher access required" })); return; }
           var session3 = sessions.find(function (s) { return s.id === body.sessionId; });
           if (!session3) { resolve(jsonResponse(404, { error: "Session not found" })); return; }
-          session3.diagnosticReport = body.diagnosticReport;
+          if (body.diagnosticReport !== undefined) session3.diagnosticReport = body.diagnosticReport;
+          if (body.teacherNotes !== undefined) session3.teacherNotes = body.teacherNotes;
           resolve(jsonResponse(200, { ok: true }));
           return;
         }
@@ -225,8 +253,21 @@ const mockScript = String.raw`
             studentStats.sessionCount = studentSessions.length;
             resolve(jsonResponse(200, {
               student: { id: studentDetail.id, fullName: studentDetail.fullName },
-              sessions: studentSessions.map(function (s) { return { id: s.id, passageTitle: s.passageTitle, passageEmoji: s.passageEmoji, startedAt: s.startedAt, finishedAt: s.finishedAt, wordCount: (s.log || []).length, comprehensionCorrect: s.comprehensionResult ? (s.comprehensionResult.correct === undefined ? null : s.comprehensionResult.correct) : null }; }),
-              studentStats: studentStats
+              sessions: studentSessions.map(function (s) {
+                var words = s.log || [];
+                var solved = words.filter(function (w) { return !w.skipped; });
+                return {
+                  id: s.id, passageTitle: s.passageTitle, passageEmoji: s.passageEmoji, startedAt: s.startedAt, finishedAt: s.finishedAt,
+                  wordCount: words.length,
+                  comprehensionCorrect: s.comprehensionResult ? (s.comprehensionResult.correct === undefined ? null : s.comprehensionResult.correct) : null,
+                  teacherNotes: s.teacherNotes || null,
+                  independentCount: solved.filter(function (w) { return w.hintsUsed === 0; }).length,
+                  totalCount: solved.length,
+                };
+              }),
+              studentStats: studentStats,
+              wordHistory: buildWordHistory(studentSessions),
+              calibration: computeCalibration(studentWords)
             }));
             return;
           }
@@ -241,13 +282,20 @@ const mockScript = String.raw`
           var allWords = [];
           var roster = scopedStudents.map(function (s) {
             var studentSessions2 = sessions.filter(function (sess) { return sess.studentId === s.id; });
+            var ownWords = [];
+            studentSessions2.forEach(function (sess) { ownWords = ownWords.concat(sess.log || []); });
             if (studentSessions2.length > 0) {
               contributingStudents += 1;
-              studentSessions2.forEach(function (sess) { allWords = allWords.concat(sess.log || []); });
+              allWords = allWords.concat(ownWords);
             }
             var lastSessionAt = null;
             studentSessions2.forEach(function (sess) { if (!lastSessionAt || sess.finishedAt > lastSessionAt) lastSessionAt = sess.finishedAt; });
-            return { id: s.id, fullName: s.fullName, createdAt: s.createdAt, lastLoginAt: s.lastLoginAt, classId: s.classId, sessionCount: studentSessions2.length, lastSessionAt: lastSessionAt };
+            var weakest = weakestClueType(computeStatsBreakdown(ownWords).breakdown);
+            return {
+              id: s.id, fullName: s.fullName, createdAt: s.createdAt, lastLoginAt: s.lastLoginAt, classId: s.classId,
+              sessionCount: studentSessions2.length, lastSessionAt: lastSessionAt,
+              weakestClueType: weakest ? { type: weakest.type, independent: weakest.independent, total: weakest.total } : null,
+            };
           });
           var classStats = computeStatsBreakdown(allWords);
           classStats.studentCount = contributingStudents;
