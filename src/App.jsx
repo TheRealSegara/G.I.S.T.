@@ -6533,20 +6533,35 @@ function FileBoxScreen({ onBack }) {
 }
 
 /* ---------------- Access Gate Screen ---------------- */
+// Reads ?code=... from the URL once, at module load, so a shared "join
+// link" (or a QR code encoding that same link) can carry the classroom
+// code invisibly instead of a teacher/student typing it in. Read outside
+// the component so a re-render never re-parses a URL this same page load
+// has already stripped the param from (see the replaceState call below).
+function readUrlCodeOnce() {
+  try {
+    return new URLSearchParams(window.location.search).get("code") || "";
+  } catch (e) {
+    return "";
+  }
+}
+
 function AccessGateScreen({ onUnlocked }) {
-  const [code, setCode] = useState("");
+  const [urlCode] = useState(readUrlCodeOnce);
+  const [code, setCode] = useState(urlCode);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const autoTriedRef = useRef(false);
 
-  async function handleSubmit() {
-    if (!code.trim() || loading) return;
+  async function submitCode(value, fromLink) {
+    if (!value.trim() || loading) return;
     setLoading(true);
     setError("");
     try {
       const response = await fetch("/api/auth", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code: code.trim() }),
+        body: JSON.stringify({ code: value.trim() }),
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
@@ -6554,12 +6569,45 @@ function AccessGateScreen({ onUnlocked }) {
         return;
       }
       if (data.dailyLimit) saveQuotaCache({ limit: data.dailyLimit });
+      if (fromLink) {
+        // Drop the code out of the visible address bar once it's done its
+        // job — a join link is meant to be invisible, and a code sitting
+        // in plain sight in the URL bar during a screen-shared live demo
+        // would defeat the point of not typing it out loud either.
+        try { window.history.replaceState({}, "", window.location.pathname); } catch (e) { /* ignore */ }
+      }
       onUnlocked(data.token, data.expiresAt);
     } catch (e) {
       setError("Couldn't reach the server, check your connection and try again.");
     } finally {
       setLoading(false);
     }
+  }
+
+  useEffect(() => {
+    if (urlCode.trim() && !autoTriedRef.current) {
+      autoTriedRef.current = true;
+      submitCode(urlCode, true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // A join link auto-submits silently — only fall back to the manual form
+  // if that attempt is still pending (nothing to show yet) or has failed
+  // (stale/wrong code in the link, so let them fix it by hand).
+  if (urlCode.trim() && !error) {
+    return (
+      <div className="max-w-md mx-auto px-6 py-8 step-in min-h-screen flex flex-col justify-center relative">
+        <FloatingDecor density={5} />
+        <div className="text-center mb-4 relative z-10">
+          <div className="flex justify-center mb-1"><CompassRose size={84} tone="teal" /></div>
+          <h1 className="font-display text-6xl font-800 sticker-title-teal mb-1">G.I.S.T.</h1>
+        </div>
+        <div className="relative z-10 bg-white p-8 text-center" style={CARD_TEAL}>
+          <p className="font-body text-sm text-stone-600" aria-live="polite">🔗 Joining your classroom…</p>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -6570,15 +6618,15 @@ function AccessGateScreen({ onUnlocked }) {
         <h1 className="font-display text-6xl font-800 sticker-title-teal mb-1">G.I.S.T.</h1>
       </div>
       <div className="relative z-10 bg-white p-8" style={CARD_TEAL}>
-        <p className="font-display font-800 text-sm uppercase tracking-wide text-stone-600 mb-2 text-center">Access Code</p>
+        <p className="font-display font-800 text-sm uppercase tracking-wide text-stone-600 mb-2 text-center">Classroom Code</p>
         <p className="font-body text-sm text-stone-700 leading-relaxed mb-5 text-center">
-          Ask your teacher or school for the code to unlock G.I.S.T.
+          Ask your teacher or school for the join link or code to unlock G.I.S.T.
         </p>
         <input
           value={code}
           onChange={(e) => setCode(e.target.value)}
-          placeholder="Enter access code"
-          aria-label="Access code"
+          placeholder="Enter classroom code"
+          aria-label="Classroom code"
           autoComplete="off"
           spellCheck={false}
           autoFocus
@@ -6586,7 +6634,7 @@ function AccessGateScreen({ onUnlocked }) {
         />
         {error && <p className="font-body text-xs text-red-600 text-center mt-3" aria-live="polite">{error}</p>}
         <div className="flex justify-center mt-6">
-          <BigButton onClick={handleSubmit} disabled={!code.trim() || loading}>
+          <BigButton onClick={() => submitCode(code, false)} disabled={!code.trim() || loading}>
             {loading ? "Checking…" : "Unlock"}
           </BigButton>
         </div>
