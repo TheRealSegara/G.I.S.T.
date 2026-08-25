@@ -1430,7 +1430,7 @@ function SecretAnimalPicker({ value, onChange }) {
 }
 
 /* ---------------- Setup Screen ---------------- */
-function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, onViewDemoReport, bilingual, onToggleBilingual, onStudentAuthenticated, onOpenFileBox, onOpenTeacherGuide, onOpenBuildYourOwn }) {
+function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, bilingual, onToggleBilingual, onStudentAuthenticated, onOpenFileBox, onOpenTeacherTools }) {
   const [mode, setMode] = useState(null); // null (main menu) | "tour" | "play" | "maker"
   const [step, setStep] = useState(1);
   const [studentId, setStudentId] = useState("");
@@ -1665,15 +1665,6 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, onViewDemoR
                 <BigButton variant="outline" className="w-72" onClick={() => { setMode("maker"); setMakerSaved(false); }}>
                   <Wrench className="inline w-4 h-4 mr-1.5" /> Create a Custom Map
                 </BigButton>
-                {onViewDemoReport && (
-                  <button
-                    onClick={() => { SFX.tap(); onViewDemoReport(); }}
-                    className="w-72 font-display font-700 text-xs text-red-700 hover:text-red-900 bg-white rounded-full px-3 py-1.5 border-2"
-                    style={{ borderColor: "#dc2626" }}
-                  >
-                    🔦 See a sample report
-                  </button>
-                )}
                 {onOpenFileBox && (
                   <button
                     onClick={() => { SFX.tap(); onOpenFileBox(); }}
@@ -1683,22 +1674,13 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, onViewDemoR
                     🗃️ File Box
                   </button>
                 )}
-                {onOpenTeacherGuide && (
+                {onOpenTeacherTools && (
                   <button
-                    onClick={() => { SFX.tap(); onOpenTeacherGuide(); }}
-                    className="w-72 font-display font-700 text-xs text-teal-700 hover:text-teal-900 bg-white rounded-full px-3 py-1.5 border-2"
-                    style={{ borderColor: "#0d9488" }}
+                    onClick={() => { SFX.tap(); onOpenTeacherTools(); }}
+                    className="w-72 font-display font-700 text-xs text-stone-500 hover:text-stone-700 bg-white rounded-full px-3 py-1.5 border-2 border-dashed"
+                    style={{ borderColor: "#c9c3b8" }}
                   >
-                    ❓ How G.I.S.T. works
-                  </button>
-                )}
-                {onOpenBuildYourOwn && (
-                  <button
-                    onClick={() => { SFX.tap(); onOpenBuildYourOwn(); }}
-                    className="w-72 font-display font-700 text-xs text-violet-700 hover:text-violet-900 bg-white rounded-full px-3 py-1.5 border-2"
-                    style={{ borderColor: "#7c3aed" }}
-                  >
-                    🧭 Build Your Own G.I.S.T.
+                    🧰 More Teacher Tools
                   </button>
                 )}
               </div>
@@ -6136,6 +6118,47 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
 // reading this once (or looking something up), not kids who benefit
 // from game-like guided onboarding, so this is one scrollable page with
 // plain sections rather than a paginated flow.
+// The teacher panel's occasional-use links (sample report, the explainer,
+// Build Your Own), moved off the main menu behind one button so that
+// panel isn't a wall of 5 buttons for the two things a teacher actually
+// does every session (Create a Custom Map, File Box). A real navigation
+// rather than an inline expand, deliberately: these get their own room
+// to breathe here instead of being squeezed back into the menu card.
+function MoreTeacherToolsScreen({ onBack, onOpenSampleReport, onOpenTeacherGuide, onOpenBuildYourOwn }) {
+  const tools = [
+    { icon: "🔦", label: "See a sample report", desc: "A finished report, no gameplay needed", onClick: onOpenSampleReport, accent: "#dc2626" },
+    { icon: "❓", label: "How G.I.S.T. works", desc: "The short explainer for new teachers", onClick: onOpenTeacherGuide, accent: "#0d9488" },
+    { icon: "🧭", label: "Build Your Own G.I.S.T.", desc: "Hand the design to your own AI assistant", onClick: onOpenBuildYourOwn, accent: "#7c3aed" },
+  ];
+  return (
+    <div className="max-w-2xl mx-auto px-6 py-8 step-in relative min-h-screen">
+      <FloatingDecor density={4} />
+      <button onClick={onBack} className="flex items-center gap-1 font-display font-700 text-xs text-stone-600 hover:text-stone-800 bg-white rounded-full px-3 py-1.5 border-[3px] border-stone-300 relative z-10 mb-5 ml-14">
+        <ChevronLeft className="w-3.5 h-3.5" /> Back to menu
+      </button>
+      <h1 className="font-display text-2xl font-800 text-stone-700 mb-1 relative z-10">🧰 More Teacher Tools</h1>
+      <p className="font-body text-xs text-stone-500 mb-5 relative z-10">A few extra things, one tap further in.</p>
+      <div className="space-y-3 relative z-10">
+        {tools.map((t) => (
+          <button
+            key={t.label}
+            onClick={() => { SFX.tap(); t.onClick(); }}
+            className="w-full flex items-center gap-4 text-left bg-white rounded-2xl px-5 py-4 transition-all hover:scale-[1.01]"
+            style={{ border: `2px solid ${t.accent}55` }}
+          >
+            <span className="text-2xl shrink-0">{t.icon}</span>
+            <span className="flex-1">
+              <span className="block font-display font-700 text-sm text-stone-700">{t.label}</span>
+              <span className="block font-body text-xs text-stone-500 mt-0.5">{t.desc}</span>
+            </span>
+            <ChevronRight className="w-4 h-4 shrink-0" style={{ color: t.accent }} />
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function TeacherGuideScreen({ onBack }) {
   const Section = ({ icon, title, children }) => (
     <div className="bg-white p-5 mb-4 rounded-3xl relative z-10" style={CARD_TEAL}>
@@ -7162,7 +7185,7 @@ export default function App() {
     );
   }
 
-  const mainPalette = ["teacher", "demo-report", "file-box", "teacher-guide", "build-your-own"].includes(screen) ? "teal" : "gold";
+  const mainPalette = ["teacher", "demo-report", "file-box", "teacher-guide", "build-your-own", "teacher-tools"].includes(screen) ? "teal" : "gold";
 
   return (
     <div className="min-h-screen text-stone-700" style={{ fontFamily: "ui-sans-serif, system-ui", background: "#FAF6EF" }}>
@@ -7211,7 +7234,6 @@ export default function App() {
             onBegin={handleBegin}
             customPassages={customPassages}
             onSaveCustomPassage={handleSaveCustomPassage}
-            onViewDemoReport={() => setScreen("demo-report")}
             bilingual={bilingual}
             onToggleBilingual={() => setBilingual((b) => !b)}
             onStudentAuthenticated={(token, expiresAt, student) => {
@@ -7219,8 +7241,7 @@ export default function App() {
               setStudentAuth({ token, expiresAt, student });
             }}
             onOpenFileBox={() => setScreen("file-box")}
-            onOpenTeacherGuide={() => setScreen("teacher-guide")}
-            onOpenBuildYourOwn={() => setScreen("build-your-own")}
+            onOpenTeacherTools={() => setScreen("teacher-tools")}
           />
         )}
         {screen === "demo-report" && (
@@ -7237,6 +7258,14 @@ export default function App() {
         {screen === "file-box" && <FileBoxScreen onBack={() => setScreen("setup")} />}
         {screen === "teacher-guide" && <TeacherGuideScreen onBack={() => setScreen("setup")} />}
         {screen === "build-your-own" && <BuildYourOwnScreen onBack={() => setScreen("setup")} />}
+        {screen === "teacher-tools" && (
+          <MoreTeacherToolsScreen
+            onBack={() => setScreen("setup")}
+            onOpenSampleReport={() => setScreen("demo-report")}
+            onOpenTeacherGuide={() => setScreen("teacher-guide")}
+            onOpenBuildYourOwn={() => setScreen("build-your-own")}
+          />
+        )}
         {screen === "passage" && (
           <PassageScreen
             passage={passage}
