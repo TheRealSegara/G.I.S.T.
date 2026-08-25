@@ -3754,8 +3754,19 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onBack
   // instead. Every other input_type is pinned to exactly one stage
   // already (mcq/true_false only at 1, word_bank/letter_connect only at
   // 2, tap_select/reverse_clue only at 3), so its own instruction is
-  // already the specific one.
-  const instr = current ? (current.input_type === "text" ? STAGE_INSTRUCTIONS[current.stage] : INPUT_TYPE_INSTRUCTIONS[current.input_type]) : null;
+  // already the specific one. Stage 1 is the one exception: it's never
+  // supposed to be "text" by design (Stage 1 is always mcq/true_false),
+  // but the generic fallback for a word with no curated definition (and,
+  // in principle, a rare AI deviation) can still produce it -- falling
+  // through to STAGE_INSTRUCTIONS[1] there would wrongly say "Pick the
+  // best answer" over a free-text box with nothing to pick.
+  const instr = current
+    ? current.input_type === "text"
+      ? current.stage === 1
+        ? INPUT_TYPE_INSTRUCTIONS.text
+        : STAGE_INSTRUCTIONS[current.stage]
+      : INPUT_TYPE_INSTRUCTIONS[current.input_type]
+    : null;
 
   const StageTracker = () => (
     <div className="flex items-center justify-center gap-1.5 shrink-0">
