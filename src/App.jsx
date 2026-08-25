@@ -2806,7 +2806,7 @@ function CloseButton({ onClick }) {
 }
 
 function CloseConfirmModal({ onCancel, onConfirm, screen, studentId }) {
-  const inActiveSession = screen === "passage" || screen === "coach" || screen === "comprehension" || screen === "teacher";
+  const inActiveSession = screen === "passage" || screen === "coach" || screen === "skip-generating" || screen === "comprehension" || screen === "teacher";
   const atRecap = screen === "recap";
   const cancelRef = useRef(null);
   const confirmRef = useRef(null);
@@ -3644,13 +3644,17 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onSkip
         };
         setTimeout(() => setPostPhase("gotItVia"), 1400);
       } else {
-        // Only a WRONG answer (hint_given) counts toward the stuck limit --
-        // a student answering every stage correctly still gets exactly 4
-        // non-resolved turns (the advances into stages 2, 3, 4, and 5)
-        // before the 5th, resolving turn, so counting every non-resolved
-        // turn regardless of correctness would auto-skip a perfect
-        // playthrough right as it's about to finish.
-        if (parsed.hint_given) {
+        // Only a turn that made no forward progress counts toward the
+        // stuck limit -- a student answering every stage correctly still
+        // gets exactly 4 non-resolved turns (the advances into stages 2,
+        // 3, 4, and 5) before the 5th, resolving turn, so counting every
+        // non-resolved turn regardless of progress would auto-skip a
+        // perfect playthrough right as it's about to finish. Comparing
+        // stages directly (rather than trusting hint_given) also still
+        // catches a turn that's neither resolved nor hint_given but
+        // genuinely didn't move the student forward either.
+        const madeProgress = (parsed.stage || 1) > (current.stage || 1);
+        if (!madeProgress) {
           exchangeCountRef.current += 1;
           if (exchangeCountRef.current >= STUCK_WORD_LIMIT) {
             // This word has gone STUCK_WORD_LIMIT unproductive exchanges
@@ -5592,9 +5596,12 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
   // Demo Mode only, and only for the live "just finished" report (never a
   // real historical session being browsed in File Box, which is what
   // hideResetSection distinguishes) -- generate the diagnostic summary
-  // immediately on arrival instead of waiting for a manual button press, so
-  // a presenter using the skip-to-report shortcut lands on a fully-formed
-  // report right away.
+  // immediately on arrival instead of waiting for a manual button press,
+  // whenever Demo Mode reaches this screen at all (not just via the
+  // skip-to-report shortcut, though that's the main reason arriving here
+  // fast matters), so a presenter isn't stuck clicking a button before
+  // moving on to the rest of the demo. Costs nothing extra: Demo Mode
+  // routes this same "diagnostic" call through the mock, not a real one.
   useEffect(() => {
     if (demoModeActive && !isDemo && !hideResetSection && !summary && !loading) {
       generateSummary();
@@ -7078,6 +7085,11 @@ export default function App() {
     setLog([...newLog, ...synthesized]);
     setSolvedWords(passage.words.map((w) => w.word));
     setActiveWord(null);
+    // Neither "coach" (activeWord is now null) nor any other screen value
+    // matches anything while the comprehension call below is in flight --
+    // without a dedicated screen for it, the whole content area would
+    // render blank for however long that call (plus retries) takes.
+    setScreen("skip-generating");
     let result = { ran: false };
     try {
       const parsed = await callClaudeWithRetry(
@@ -7259,6 +7271,14 @@ export default function App() {
             isTransferWord={activeWord && transferWordId === activeWord.word}
             bilingual={bilingual}
           />
+        )}
+        {screen === "skip-generating" && (
+          <div className="max-w-2xl mx-auto px-6 py-8 step-in min-h-screen flex flex-col justify-center relative">
+            <FloatingDecor density={4} />
+            <div className="bg-white p-8 step-in relative z-10 text-center" style={CARD_GOLD}>
+              <p className="font-hand text-xl text-stone-500">🔎 Putting the report together…</p>
+            </div>
+          </div>
         )}
         {screen === "comprehension" && (
           <ComprehensionScreen
