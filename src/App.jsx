@@ -651,6 +651,19 @@ const STAGE_GRADIENTS = {
   5: "linear-gradient(135deg,#f472b6,#db2777)",
 };
 
+// Stage 3's two "word present" mechanics (tap_select, reverse_clue) used to
+// clash: the instruction badge above the chips always took STAGE_GRADIENTS[3]
+// (amber, since both are stage 3), while the chips themselves were colored
+// per input_type (amber for tap_select, teal for reverse_clue) -- so
+// reverse_clue showed an amber badge over teal chips. This is the single
+// source of truth both now pull from, so a mechanic reads as one consistent
+// color everywhere it appears (badge, chips, chip-area background, and the
+// "From the passage" reference box).
+const INPUT_TYPE_ACCENT = {
+  tap_select: { border: "#f59e0b", shadow: "#c2410c", soft: "#fef3c7", gradient: "linear-gradient(135deg,#fbbf24,#d97706)" },
+  reverse_clue: { border: "#0d9488", shadow: "#0f766e", soft: "#ccfbf1", gradient: "linear-gradient(135deg,#5eead4,#0d9488)" },
+};
+
 // COMPANION_PERSONAS, buildCoachSystemPrompt, TRANSFER_TEST_SYSTEM_PROMPT,
 // COMPREHENSION_SYSTEM_PROMPT, SINGLE_WORD_REGEN_PROMPT,
 // LEVEL_MAKER_SYSTEM_PROMPT, and DIAGNOSTIC_SYSTEM_PROMPT are imported
@@ -3523,7 +3536,15 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onBack
           return;
         }
         if (parsed.hint_given) { SFX.hint(); } else { SFX.correct(); }
-        appendCoachMessage({ from: "coach", text: parsed.message, hint: parsed.hint_given, stage: parsed.stage }, { lockAnswers: true, optionsReadMs: computeOptionsReadMs(parsed) });
+        // Surfaces the adaptive engine's stage jumps instead of leaving them
+        // silent: a confident answer that skips ahead 2 stages (see the
+        // Adaptive rules in buildCoachSystemPrompt) reads very differently
+        // from a normal 1-stage advance, and a drop-back after a wrong
+        // answer deserves a gentler note, not just a hint bubble. Only
+        // meaningful jumps get a badge (see the render below) -- a plain
+        // 1-stage advance stays quiet so this doesn't add noise every turn.
+        const stageJump = (parsed.stage || 1) - (current.stage || 1);
+        appendCoachMessage({ from: "coach", text: parsed.message, hint: parsed.hint_given, stage: parsed.stage, stageJump }, { lockAnswers: true, optionsReadMs: computeOptionsReadMs(parsed) });
         setCurrent(parsed);
         if (soundEnabled) setTimeout(() => speak(parsed.message), 350);
       }
@@ -3773,7 +3794,7 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onBack
                     </span>
                   )}
                   <div
-                    className={`max-w-[85%] px-4 py-3 sm:px-5 sm:py-3.5 rounded-2xl border-2 ${
+                    className={`relative max-w-[85%] px-4 py-3 sm:px-5 sm:py-3.5 rounded-2xl border-2 ${
                       m.from === "student"
                         ? "text-white border-teal-600"
                         : m.revealed
@@ -3801,6 +3822,15 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onBack
                       <p className="font-display font-800 text-sm uppercase tracking-wide text-stone-500 mb-1.5">
                         {(COMPANION_PERSONAS[avatarConfig.companion] || COMPANION_PERSONAS.parrot).name}
                       </p>
+                    )}
+                    {typeof m.stageJump === "number" && m.stageJump >= 2 && !m.resolved && (
+                      <>
+                        <Sparkle count={6} />
+                        <p className="font-hand text-lg sm:text-xl text-emerald-600 mb-1">⚡ great job, skipping ahead —</p>
+                      </>
+                    )}
+                    {typeof m.stageJump === "number" && m.stageJump <= -1 && !m.resolved && (
+                      <p className="font-hand text-lg sm:text-xl text-sky-600 mb-1">↩️ let's rebuild this one —</p>
                     )}
                     {m.hint && !m.resolved && <p className="font-hand text-lg sm:text-xl text-amber-600 mb-1">💡 here's a hint —</p>}
                     {m.revealed && <p className="font-hand text-lg sm:text-xl text-rose-500 mb-1">📖 here's the answer —</p>}
@@ -3869,13 +3899,28 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onBack
                 // uses the word correctly and pointing it out doesn't
                 // give away its answer (a different word, the clue).
                 const wrongUsage = current.stage === 3 && current.input_type !== "reverse_clue";
+                // The box's whole point differs by task -- a plain example
+                // (Stage 1/4/5), a memory test with the word hidden (Stage
+                // 2), a "something's off, find it" prompt (Stage 3
+                // tap_select/text), or a "read closely for the clue" prompt
+                // (Stage 3 reverse_clue) -- so it shouldn't wear the same
+                // teal costume every time. Colors reuse INPUT_TYPE_ACCENT
+                // so this box, the instruction badge, and the chip options
+                // below all agree on one color per mechanic.
+                const boxTheme = blank
+                  ? { border: "#a8a29e", shadow: "#78716c", label: " — word hidden, this stage tests recall!", labelClass: "text-stone-600" }
+                  : wrongUsage
+                  ? { border: INPUT_TYPE_ACCENT.tap_select.border, shadow: INPUT_TYPE_ACCENT.tap_select.shadow, label: " — something's off here, can you spot it?", labelClass: "text-amber-700" }
+                  : current.input_type === "reverse_clue"
+                  ? { border: INPUT_TYPE_ACCENT.reverse_clue.border, shadow: INPUT_TYPE_ACCENT.reverse_clue.shadow, label: " — read closely for the clue", labelClass: "text-teal-700" }
+                  : { border: "#0d9488", shadow: "#0f766e", label: "", labelClass: "text-teal-700" };
                 return (
                   <div
                     className="px-5 py-4 rounded-2xl bg-white step-in"
-                    style={{ border: "3px solid #0d9488", boxShadow: "0 4px 0 0 #0f766e" }}
+                    style={{ border: `3px solid ${boxTheme.border}`, boxShadow: `0 4px 0 0 ${boxTheme.shadow}` }}
                   >
-                    <p className="font-display font-800 text-sm uppercase tracking-wide text-teal-700 mb-1.5">
-                      📖 From the passage{blank ? " — word hidden, this stage tests recall!" : ""}
+                    <p className={`font-display font-800 text-sm uppercase tracking-wide mb-1.5 ${boxTheme.labelClass}`}>
+                      📖 From the passage{boxTheme.label}
                     </p>
                     <p className="font-body text-lg sm:text-xl text-stone-800 italic leading-snug font-700">
                       {wrongUsage
@@ -3899,7 +3944,7 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onBack
               {isLatestSlide && postPhase === null && !loading && instr && (
                 <div
                   className="flex items-center gap-2 rounded-2xl px-4 py-2.5 step-in border-4 border-white"
-                  style={{ background: STAGE_GRADIENTS[current.stage] }}
+                  style={{ background: INPUT_TYPE_ACCENT[current.input_type]?.gradient || STAGE_GRADIENTS[current.stage] }}
                 >
                   <span className="text-2xl sm:text-3xl">{instr.icon}</span>
                   <p className="font-display font-800 text-lg sm:text-xl text-white leading-tight" style={{ textShadow: "1px 1px 0 rgba(0,0,0,0.15)" }}>
@@ -3915,7 +3960,7 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onBack
               )}
 
               {isLatestSlide && postPhase === null && !loading && !answersLocked && current && current.input_type === "mcq" && current.options && (
-                <div className="grid grid-cols-1 gap-3 step-in answer-settle" style={settlingStyle(answersEnabled)}>
+                <div className={`grid grid-cols-1 gap-3 step-in answer-settle${answersEnabled ? " bounce-in" : ""}`} style={settlingStyle(answersEnabled)}>
                   {current.options.map((opt, i) => (
                     <button
                       key={i}
@@ -3933,7 +3978,7 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onBack
               )}
 
               {isLatestSlide && postPhase === null && !loading && !answersLocked && current && current.input_type === "true_false" && current.options && (
-                <div className="grid grid-cols-2 gap-3 step-in answer-settle" style={settlingStyle(answersEnabled)}>
+                <div className={`grid grid-cols-2 gap-3 step-in answer-settle${answersEnabled ? " bounce-in" : ""}`} style={settlingStyle(answersEnabled)}>
                   {current.options.map((opt, i) => (
                     <button
                       key={i}
@@ -3951,30 +3996,36 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onBack
                 </div>
               )}
 
-              {isLatestSlide && postPhase === null && !loading && !answersLocked && current && (current.input_type === "tap_select" || current.input_type === "reverse_clue") && current.options && (
-                <div className="flex flex-wrap gap-3 justify-center step-in answer-settle" style={settlingStyle(answersEnabled)}>
-                  {current.options.map((word, i) => (
-                    <button
-                      key={i}
-                      onClick={() => submitAnswer(word)}
-                      disabled={!answersEnabled}
-                      className="px-4 py-2.5 bg-white rounded-full font-display font-700 text-lg sm:text-xl text-stone-700 transition-all hover:scale-110"
-                      style={{ border: current.input_type === "reverse_clue" ? "3px solid #0d9488" : "3px solid #f59e0b", boxShadow: current.input_type === "reverse_clue" ? "0 3px 0 0 #0f766e" : "0 3px 0 0 #c2410c" }}
-                    >
-                      {word}
-                    </button>
-                  ))}
-                </div>
-              )}
+              {isLatestSlide && postPhase === null && !loading && !answersLocked && current && (current.input_type === "tap_select" || current.input_type === "reverse_clue") && current.options && (() => {
+                const accent = INPUT_TYPE_ACCENT[current.input_type];
+                return (
+                  <div
+                    className={`flex flex-wrap gap-3 justify-center rounded-2xl p-3 step-in answer-settle${answersEnabled ? " bounce-in" : ""}`}
+                    style={{ ...settlingStyle(answersEnabled), background: accent.soft }}
+                  >
+                    {current.options.map((word, i) => (
+                      <button
+                        key={i}
+                        onClick={() => submitAnswer(word)}
+                        disabled={!answersEnabled}
+                        className="px-4 py-2.5 bg-white rounded-full font-display font-700 text-lg sm:text-xl text-stone-700 transition-all hover:scale-110"
+                        style={{ border: `3px solid ${accent.border}`, boxShadow: `0 3px 0 0 ${accent.shadow}` }}
+                      >
+                        {word}
+                      </button>
+                    ))}
+                  </div>
+                );
+              })()}
 
               {isLatestSlide && postPhase === null && !loading && !answersLocked && current && current.input_type === "word_bank" && current.word_tiles && (
-                <div className="answer-settle" style={settlingStyle(answersEnabled)}>
+                <div className={`answer-settle${answersEnabled ? " bounce-in" : ""}`} style={settlingStyle(answersEnabled)}>
                   <WordBankWidget key={current.stage + "-" + current.word_tiles.join("")} tiles={current.word_tiles} onSubmit={submitAnswer} disabled={!answersEnabled} />
                 </div>
               )}
 
               {isLatestSlide && postPhase === null && !loading && !answersLocked && current && current.input_type === "letter_connect" && current.word_tiles && (
-                <div className="answer-settle" style={settlingStyle(answersEnabled)}>
+                <div className={`answer-settle${answersEnabled ? " bounce-in" : ""}`} style={settlingStyle(answersEnabled)}>
                   <LetterConnectWidget key={current.stage + "-" + current.word_tiles.join("")} tiles={current.word_tiles} onSubmit={submitAnswer} disabled={!answersEnabled} />
                 </div>
               )}
@@ -3989,7 +4040,7 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onBack
                       : textInput.trim();
                     submitAnswer(fullAnswer);
                   }}
-                  className="flex flex-col gap-2 step-in answer-settle"
+                  className={`flex flex-col gap-2 step-in answer-settle${answersEnabled ? " bounce-in" : ""}`}
                   style={settlingStyle(answersEnabled)}
                 >
                   {current.sentence_starter && (
