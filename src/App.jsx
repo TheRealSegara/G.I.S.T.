@@ -3327,7 +3327,7 @@ function groupMessagesByExchange(display) {
   return groups;
 }
 
-function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onBack, soundOn, onToggleSound, wordIndex, isTransferWord, bilingual }) {
+function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onSkipToReport, onBack, soundOn, onToggleSound, wordIndex, isTransferWord, bilingual }) {
   const stage1Type = STAGE1_CYCLE[wordIndex % STAGE1_CYCLE.length];
   const stage2Type = STAGE2_CYCLE[wordIndex % STAGE2_CYCLE.length];
   const stage3Type = STAGE3_CYCLE[(wordIndex + 1) % STAGE3_CYCLE.length];
@@ -3644,15 +3644,24 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onBack
         };
         setTimeout(() => setPostPhase("gotItVia"), 1400);
       } else {
-        exchangeCountRef.current += 1;
-        if (exchangeCountRef.current >= STUCK_WORD_LIMIT) {
-          // This word has gone STUCK_WORD_LIMIT exchanges without
-          // resolving; auto-reveal via the same free fallback Skip uses
-          // rather than let a genuinely stuck student keep spending AI
-          // calls on a word that isn't landing. Pass parsed.stage
-          // explicitly, see the stageOverride comment on skipWord().
-          skipWord(parsed.stage || 1, "stuck_limit");
-          return;
+        // Only a WRONG answer (hint_given) counts toward the stuck limit --
+        // a student answering every stage correctly still gets exactly 4
+        // non-resolved turns (the advances into stages 2, 3, 4, and 5)
+        // before the 5th, resolving turn, so counting every non-resolved
+        // turn regardless of correctness would auto-skip a perfect
+        // playthrough right as it's about to finish.
+        if (parsed.hint_given) {
+          exchangeCountRef.current += 1;
+          if (exchangeCountRef.current >= STUCK_WORD_LIMIT) {
+            // This word has gone STUCK_WORD_LIMIT unproductive exchanges
+            // without resolving; auto-reveal via the same free fallback
+            // Skip uses rather than let a genuinely stuck student keep
+            // spending AI calls on a word that isn't landing. Pass
+            // parsed.stage explicitly, see the stageOverride comment on
+            // skipWord().
+            skipWord(parsed.stage || 1, "stuck_limit");
+            return;
+          }
         }
         if (parsed.hint_given) { SFX.hint(); } else { SFX.correct(); }
         // Surfaces the adaptive engine's stage jumps instead of leaving them
@@ -3746,6 +3755,33 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onBack
       gotItVia: gotItViaValue,
       clueIdentified: clueValue,
       transferPassed: transferResult,
+      timeToAnswerSec: wordStartRef.current ? Math.round((Date.now() - wordStartRef.current) / 1000) : null,
+      minGateSec: Math.round(gateMsAccumRef.current / 1000),
+    });
+  }
+
+  // Demo Mode only: this word has already gone through all 5 stages for
+  // real (that's the whole point of the shortcut -- one full, genuine
+  // playthrough), so it's finalized the normal way. Only the REMAINING
+  // words in the session get synthesized, handled by the caller.
+  function skipToReport() {
+    const base = resolvedBaseRef.current || {
+      word: targetWord.word,
+      clueType: targetWord.clueType,
+      concreteness: targetWord.concreteness,
+      finalStage: stageReached,
+      hintsUsed: hintsUsedRef.current,
+      funFact: null,
+      skipped: false,
+      solvedAt: Date.now(),
+      passageTitle: passage.title,
+    };
+    onSkipToReport({
+      ...base,
+      priorKnowledge,
+      gotItVia: "clues",
+      clueIdentified: null,
+      transferPassed: null,
       timeToAnswerSec: wordStartRef.current ? Math.round((Date.now() - wordStartRef.current) / 1000) : null,
       minGateSec: Math.round(gateMsAccumRef.current / 1000),
     });
@@ -4238,6 +4274,15 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onBack
                     <ReflectionButton onClick={() => handleGotItVia("clues")} ms="Saya guna petunjuk">🔍 I used the clues</ReflectionButton>
                     <ReflectionButton onClick={() => handleGotItVia("guessed")} ms="Saya meneka">🎲 I guessed</ReflectionButton>
                   </div>
+                  {demoModeActive && (
+                    <button
+                      onClick={() => { SFX.tap(); skipToReport(); }}
+                      className="mt-5 font-display font-700 text-xs text-violet-700 hover:text-violet-900 bg-white rounded-full px-3 py-1.5 border-2"
+                      style={{ borderColor: "#7c3aed" }}
+                    >
+                      ⏩ Skip ahead to the report
+                    </button>
+                  )}
                 </div>
               )}
 
@@ -4868,6 +4913,42 @@ function computeConfidenceBadge(log) {
   return { level, guessSignals, mismatchSignals, skippedCount };
 }
 
+// Demo Mode "skip to report" fast-forward: once a presenter has fully
+// played ONE word through all 5 stages, they can jump straight to the
+// report instead of grinding through every remaining word too (see the
+// "Skip ahead to the report" button on the gotItVia reflection screen in
+// CoachScreen). The other words in this session get a synthesized-but-
+// plausible completion profile, cycled through this small pool so the
+// report shows the same kind of variety a real session would -- some
+// words easy, some needing a hint -- instead of N identical entries that
+// would make the report's own pattern-detection look flat and pointless.
+const SKIP_REPORT_PROFILES = [
+  { finalStage: 1, hintsUsed: 0, priorKnowledge: "yes", gotItVia: "knew", transferPassed: null, timeToAnswerSec: 5 },
+  { finalStage: 2, hintsUsed: 0, priorKnowledge: "no", gotItVia: "clues", transferPassed: true, timeToAnswerSec: 15 },
+  { finalStage: 3, hintsUsed: 1, priorKnowledge: "not_sure", gotItVia: "clues", transferPassed: null, timeToAnswerSec: 28 },
+  { finalStage: 4, hintsUsed: 1, priorKnowledge: "no", gotItVia: "guessed", transferPassed: false, timeToAnswerSec: 40 },
+];
+
+function buildSkipReportEntry(wordDef, passageTitle, profile) {
+  return {
+    word: wordDef.word,
+    clueType: wordDef.clueType,
+    concreteness: wordDef.concreteness,
+    finalStage: profile.finalStage,
+    hintsUsed: profile.hintsUsed,
+    funFact: null,
+    skipped: false,
+    solvedAt: Date.now(),
+    passageTitle,
+    priorKnowledge: profile.priorKnowledge,
+    gotItVia: profile.gotItVia,
+    clueIdentified: null,
+    transferPassed: profile.transferPassed,
+    timeToAnswerSec: profile.timeToAnswerSec,
+    minGateSec: 0,
+  };
+}
+
 const SAMPLE_LOG = [
   { word: "brave", clueType: "contrast", concreteness: "abstract", finalStage: 2, hintsUsed: 0, skipped: false, priorKnowledge: "no", gotItVia: "clues", clueIdentified: "but she says they are", transferPassed: null, timeToAnswerSec: 18, passageTitle: "Pet Show Day", solvedAt: Date.now() - 500000 },
   { word: "camouflage", clueType: "definition", concreteness: "abstract", finalStage: 4, hintsUsed: 1, skipped: false, priorKnowledge: "not_sure", gotItVia: "clues", clueIdentified: "helps them hide from enemies", transferPassed: true, timeToAnswerSec: 35, passageTitle: "Pet Show Day", solvedAt: Date.now() - 400000 },
@@ -5410,6 +5491,19 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
     }
     setLoading(false);
   }
+
+  // Demo Mode only, and only for the live "just finished" report (never a
+  // real historical session being browsed in File Box, which is what
+  // hideResetSection distinguishes) -- generate the diagnostic summary
+  // immediately on arrival instead of waiting for a manual button press, so
+  // a presenter using the skip-to-report shortcut lands on a fully-formed
+  // report right away.
+  useEffect(() => {
+    if (demoModeActive && !isDemo && !hideResetSection && !summary && !loading) {
+      generateSummary();
+    }
+    // eslint-disable-next-line
+  }, []);
 
   const glance = computeAtAGlance(log);
 
@@ -6782,6 +6876,40 @@ export default function App() {
     setTimeout(() => setStreakMsg(null), 6000);
   }
 
+  // Demo Mode only: the word just played is finalized for real (via
+  // finalizeWord in CoachScreen), then every other word in this passage is
+  // synthesized with varied profiles so the report has real variety to show
+  // -- and the report itself is generated immediately, skipping straight
+  // past the comprehension question and recap screen, since the whole point
+  // is saving a presenter's time.
+  async function handleSkipToReport(currentEntry) {
+    const newLog = [...log, currentEntry];
+    const nowSolvedInPassage = [...solvedWords, currentEntry.word];
+    const remaining = passage.words.filter((w) => !nowSolvedInPassage.includes(w.word));
+    const synthesized = remaining.map((w, i) =>
+      buildSkipReportEntry(w, passage.title, SKIP_REPORT_PROFILES[i % SKIP_REPORT_PROFILES.length])
+    );
+    setLog([...newLog, ...synthesized]);
+    setSolvedWords(passage.words.map((w) => w.word));
+    setActiveWord(null);
+    let result = { ran: false };
+    try {
+      const parsed = await callClaudeWithRetry(
+        "comprehension",
+        null,
+        [{ role: "user", content: `Passage: "${passage.text}"` }],
+        MAX_RETRY_ATTEMPTS,
+        (p) => p && p.question && Array.isArray(p.options)
+      );
+      result = { ran: true, correct: true, question: parsed.question, studentAnswer: parsed.correctAnswer, correctAnswer: parsed.correctAnswer };
+    } catch (e) {
+      // Keep the default { ran: false } -- the report still works fine
+      // without a comprehension result, same as a real session where it failed.
+    }
+    setComprehensionResult(result);
+    setScreen("teacher");
+  }
+
   function handleReset() {
     setLog([]);
     setSolvedWords([]);
@@ -6937,6 +7065,7 @@ export default function App() {
             targetWord={activeWord}
             avatarConfig={avatarConfig}
             onWordResolved={handleWordResolved}
+            onSkipToReport={handleSkipToReport}
             onBack={() => setScreen("passage")}
             soundOn={soundOn}
             onToggleSound={(next) => { setSoundOn(next); setSoundEnabledGlobal(next); }}
