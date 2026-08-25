@@ -1695,28 +1695,38 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, onViewDemoR
                   </button>
                 )}
               </div>
-              <button
-                onClick={() => { SFX.tap(); setDemoMode(!demoModeActive); }}
-                role="switch"
-                aria-checked={demoModeActive}
-                title="For live presentations: instant scripted coach responses instead of a real (slower) AI call. Say out loud that you're using it — it's meant to be disclosed, not hidden."
-                className="flex items-center gap-2 mt-3 rounded-full pl-1.5 pr-3 py-1.5 border-2"
-                style={{ borderColor: demoModeActive ? "#7c3aed" : "#d6d3d1", background: demoModeActive ? "#ede9fe" : "white" }}
+            </div>
+          </div>
+
+          {/* Presenter panel — kept separate from the teacher panel above so
+              a live-demo-only control doesn't crowd the everyday teacher
+              links. */}
+          <div
+            className="flex items-center justify-center gap-3 border-t border-stone-200 px-8 py-4 rounded-b-2xl"
+            style={{ background: "radial-gradient(#7c3aed1f 1.4px, transparent 1.4px), #faf7ff", backgroundSize: "13px 13px, auto" }}
+          >
+            <p className="font-display font-800 text-[11px] uppercase tracking-wide text-stone-500">For Presenters</p>
+            <button
+              onClick={() => { SFX.tap(); setDemoMode(!demoModeActive); }}
+              role="switch"
+              aria-checked={demoModeActive}
+              title="For live presentations: instant scripted coach responses instead of a real (slower) AI call. Say out loud that you're using it — it's meant to be disclosed, not hidden."
+              className="flex items-center gap-2 rounded-full pl-1.5 pr-3 py-1.5 border-2"
+              style={{ borderColor: demoModeActive ? "#7c3aed" : "#d6d3d1", background: demoModeActive ? "#ede9fe" : "white" }}
+            >
+              <span
+                className="relative w-8 h-4.5 rounded-full transition-colors shrink-0"
+                style={{ background: demoModeActive ? "#7c3aed" : "#d6d3d1", width: "32px", height: "18px" }}
               >
                 <span
-                  className="relative w-8 h-4.5 rounded-full transition-colors shrink-0"
-                  style={{ background: demoModeActive ? "#7c3aed" : "#d6d3d1", width: "32px", height: "18px" }}
-                >
-                  <span
-                    className="absolute top-0.5 w-3.5 h-3.5 bg-white rounded-full transition-transform"
-                    style={{ left: "2px", transform: demoModeActive ? "translateX(14px)" : "translateX(0)" }}
-                  />
-                </span>
-                <span className="font-display font-700 text-xs" style={{ color: demoModeActive ? "#5b21b6" : "#78716c" }}>
-                  🎬 Demo Mode {demoModeActive ? "ON — instant scripted replies" : "(for presentations)"}
-                </span>
-              </button>
-            </div>
+                  className="absolute top-0.5 w-3.5 h-3.5 bg-white rounded-full transition-transform"
+                  style={{ left: "2px", transform: demoModeActive ? "translateX(14px)" : "translateX(0)" }}
+                />
+              </span>
+              <span className="font-display font-700 text-xs" style={{ color: demoModeActive ? "#5b21b6" : "#78716c" }}>
+                🎬 Demo Mode {demoModeActive ? "ON" : "OFF"}
+              </span>
+            </button>
           </div>
         </div>
         <Footer />
@@ -3775,7 +3785,7 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onBack
             className="shrink-0 mb-2 px-3 py-1.5 rounded-full text-center font-display font-800 text-xs"
             style={{ background: "#ede9fe", border: "2px solid #7c3aed", color: "#5b21b6" }}
           >
-            🎬 DEMO MODE — instant scripted replies, not a live AI call
+            🎬 DEMO MODE
           </p>
         )}
         {/* Header card */}
@@ -5432,7 +5442,7 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
         <div className="mb-5 px-4 py-3 rounded-2xl relative z-10 step-in flex items-center gap-2" style={{ background: "#ede9fe", border: "3px solid #7c3aed" }}>
           <span className="text-xl">🎬</span>
           <p className="font-body text-sm" style={{ color: "#5b21b6" }}>
-            <strong>Demo Mode is on.</strong> Any new report generated now uses instant scripted replies, not a live AI call.
+            <strong>Demo Mode is on</strong> for any new report generated now.
           </p>
         </div>
       )}
