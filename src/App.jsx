@@ -1698,19 +1698,23 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, onViewDemoR
             </div>
           </div>
 
-          {/* Presenter panel — kept separate from the teacher panel above so
-              a live-demo-only control doesn't crowd the everyday teacher
-              links. */}
+          {/* Third panel, deliberately separate from the teacher panel above
+              so this doesn't crowd the everyday teacher links. Dual
+              purpose: click through the coach yourself to learn how it
+              works, or use it to present live without any waiting — same
+              switch either way. */}
           <div
-            className="flex items-center justify-center gap-3 border-t border-stone-200 px-8 py-4 rounded-b-2xl"
+            className="flex items-center justify-center gap-4 flex-wrap border-t border-stone-200 px-8 py-4 rounded-b-2xl"
             style={{ background: "radial-gradient(#7c3aed1f 1.4px, transparent 1.4px), #faf7ff", backgroundSize: "13px 13px, auto" }}
           >
-            <p className="font-display font-800 text-[11px] uppercase tracking-wide text-stone-500">For Presenters</p>
+            <p className="font-body text-xs text-stone-500 text-center">
+              🎬 New here? Try it yourself, instantly, no waiting between turns.
+            </p>
             <button
               onClick={() => { SFX.tap(); setDemoMode(!demoModeActive); }}
               role="switch"
               aria-checked={demoModeActive}
-              title="For live presentations: instant scripted coach responses instead of a real (slower) AI call. Say out loud that you're using it — it's meant to be disclosed, not hidden."
+              title="Turns on instant example replies, no waiting between turns — great for exploring G.I.S.T. yourself or showing it to others live."
               className="flex items-center gap-2 rounded-full pl-1.5 pr-3 py-1.5 border-2"
               style={{ borderColor: demoModeActive ? "#7c3aed" : "#d6d3d1", background: demoModeActive ? "#ede9fe" : "white" }}
             >
@@ -1724,7 +1728,7 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, onViewDemoR
                 />
               </span>
               <span className="font-display font-700 text-xs" style={{ color: demoModeActive ? "#5b21b6" : "#78716c" }}>
-                🎬 Demo Mode {demoModeActive ? "ON" : "OFF"}
+                Demo Mode {demoModeActive ? "ON" : "OFF"}
               </span>
             </button>
           </div>
