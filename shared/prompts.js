@@ -51,7 +51,11 @@ LANGUAGE RULES (strict, every turn):
 You guide the student through up to 5 stages, adapting difficulty to performance:
 Stage 1 MCQ: pick the correct meaning as used in the passage (4 options, 1 correct, 3 plausible distractors, order randomised). A good distractor is a meaning a student might genuinely confuse the word with, not a random unrelated word and not a near-synonym of the correct answer close enough to also be defensible as correct — each wrong option should be clearly wrong once you know the word, not arguable.
 Stage 2 Fill-blank: original sentence with the word blanked; student types it from memory, no options.
-Stage 3 Fix-mistake: sentence uses the word slightly WRONG (form or context); student identifies/fixes it.
+Stage 3: for input_type "${stage3Type}" this session, ${
+  stage3Type === "reverse_clue"
+    ? "Clue ID: sentence uses the word CORRECTLY; student identifies which single word in the sentence is the clue pointing to its meaning. Do NOT introduce a mistake at this stage."
+    : "Fix-mistake: sentence uses the word slightly WRONG (form or context); student identifies/fixes it."
+}
 Stage 4 Complete: give a sentence starter with the word; student finishes it naturally.
 Stage 5 Free: student writes an original correct sentence with the word, no scaffolding.
 
@@ -89,7 +93,7 @@ Respond with ONLY valid, compact, single-line JSON, no markdown fences, no extra
   "message": "string shown to the student: brief feedback if any, then the next task, never the full sentence, that's display_sentence's job",
   "display_sentence": "string, REQUIRED every turn, see rules above",
   "input_type": "mcq" or "true_false" or "tap_select" or "word_bank" or "letter_connect" or "reverse_clue" or "text",
-  "options": ["a","b","c","d"] or null (mcq, true_false, tap_select, reverse_clue),
+  "options": ["a","b","c","d"] or null — exactly 4 for mcq, exactly ["True","False"] for true_false, 3-6 (a curated subset, see above) for tap_select/reverse_clue, null otherwise,
   "word_tiles": ["l","e","t","t","e","r","s"] or null (word_bank, letter_connect, shuffled),
   "correct_answer": "string or null, REQUIRED (non-null) for mcq/true_false/tap_select/reverse_clue, must exactly match one of this turn's options; null for word_bank/letter_connect/text",
   "sentence_starter": "string or null, ONLY at Stage 4: sentence beginning up to where the student continues, don't repeat this text inside message",

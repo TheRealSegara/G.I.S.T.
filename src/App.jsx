@@ -636,7 +636,7 @@ const STAGE_INSTRUCTIONS = {
 const INPUT_TYPE_INSTRUCTIONS = {
   mcq: { icon: "👉", text: "Pick the best answer" },
   true_false: { icon: "🤔", text: "True or false?" },
-  tap_select: { icon: "👆", text: "Tap the right word" },
+  tap_select: { icon: "👆", text: "Tap the wrong word" },
   word_bank: { icon: "🔤", text: "Tap the letters to spell it" },
   letter_connect: { icon: "🔗", text: "Connect the letters to spell it" },
   reverse_clue: { icon: "🕵️", text: "Tap the clue that helped you" },
@@ -3584,7 +3584,15 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onBack
   }
 
   const companionEmoji = ANIMAL_COMPANIONS.find((c) => c.id === avatarConfig.companion)?.emoji || "🦜";
-  const instr = current ? (INPUT_TYPE_INSTRUCTIONS[current.input_type] || STAGE_INSTRUCTIONS[current.stage]) : null;
+  // "text" spans 4 different stages (fill-blank, fix-mistake, continue,
+  // free-sentence) with genuinely different tasks, so its own
+  // INPUT_TYPE_INSTRUCTIONS entry is too generic ("Type your answer") to
+  // be useful there -- fall back to the stage-specific instruction
+  // instead. Every other input_type is pinned to exactly one stage
+  // already (mcq/true_false only at 1, word_bank/letter_connect only at
+  // 2, tap_select/reverse_clue only at 3), so its own instruction is
+  // already the specific one.
+  const instr = current ? (current.input_type === "text" ? STAGE_INSTRUCTIONS[current.stage] : INPUT_TYPE_INSTRUCTIONS[current.input_type]) : null;
 
   const StageTracker = () => (
     <div className="flex items-center justify-center gap-1.5 shrink-0">
@@ -3824,6 +3832,15 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onBack
               {isLatestSlide && postPhase === null && !loading && current && (() => {
                 const raw = (current.display_sentence && current.display_sentence.trim()) || contextSentence;
                 const blank = current.stage === 2;
+                // Stage 3 tap_select/text show the word used WRONG on
+                // purpose, for the student to spot -- auto-bolding it
+                // amber (the normal "here's the target word" treatment)
+                // would visually point straight at the mistake before
+                // they've even looked, undermining the actual task. Only
+                // reverse_clue keeps the highlight, since its sentence
+                // uses the word correctly and pointing it out doesn't
+                // give away its answer (a different word, the clue).
+                const wrongUsage = current.stage === 3 && current.input_type !== "reverse_clue";
                 return (
                   <div
                     className="px-5 py-4 rounded-2xl bg-white step-in"
@@ -3833,17 +3850,19 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onBack
                       📖 From the passage{blank ? " — word hidden, this stage tests recall!" : ""}
                     </p>
                     <p className="font-body text-lg sm:text-xl text-stone-800 italic leading-snug font-700">
-                      {raw.split(new RegExp(`(${targetWord.word})`, "i")).map((part, i) =>
-                        part.toLowerCase() === targetWord.word.toLowerCase() ? (
-                          blank ? (
-                            <strong key={i} className="text-stone-500 not-italic tracking-widest">▬▬▬▬▬</strong>
-                          ) : (
-                            <strong key={i} className="text-amber-700 not-italic font-800">{part}</strong>
-                          )
-                        ) : (
-                          <span key={i}>{part}</span>
-                        )
-                      )}
+                      {wrongUsage
+                        ? raw
+                        : raw.split(new RegExp(`(${targetWord.word})`, "i")).map((part, i) =>
+                            part.toLowerCase() === targetWord.word.toLowerCase() ? (
+                              blank ? (
+                                <strong key={i} className="text-stone-500 not-italic tracking-widest">▬▬▬▬▬</strong>
+                              ) : (
+                                <strong key={i} className="text-amber-700 not-italic font-800">{part}</strong>
+                              )
+                            ) : (
+                              <span key={i}>{part}</span>
+                            )
+                          )}
                     </p>
                   </div>
                 );
