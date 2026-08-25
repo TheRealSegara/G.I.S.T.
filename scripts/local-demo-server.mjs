@@ -27,8 +27,10 @@ const TOKEN_TTL_MINUTES = 720;
 /* ---------------- in-memory "database" ---------------- */
 let nextStudentId = 1;
 let nextSessionId = 1;
-const students = []; // { id, fullName, fullNameKey, secret, avatarConfig, label }
+let nextClassId = 1;
+const students = []; // { id, fullName, fullNameKey, secret, avatarConfig, label, classId }
 const sessions = []; // { id, studentId, passageTitle, passageEmoji, startedAt, finishedAt, comprehensionResult, diagnosticReport, log }
+const classes = []; // { id, name, label }
 let quotaUsedToday = 0;
 
 const app = express();
@@ -68,7 +70,7 @@ app.post("/api/student-auth", (req, res) => {
     if (students.some((s) => s.label === claims.label && s.fullNameKey === nameKey)) {
       return res.status(409).json({ error: "That name is already registered. Try Returning Student instead." });
     }
-    const student = { id: String(nextStudentId++), fullName: fullName.trim(), fullNameKey: nameKey, secret, avatarConfig, label: claims.label, createdAt: new Date().toISOString(), lastLoginAt: null };
+    const student = { id: String(nextStudentId++), fullName: fullName.trim(), fullNameKey: nameKey, secret, avatarConfig, label: claims.label, createdAt: new Date().toISOString(), lastLoginAt: null, classId: null };
     students.push(student);
     const exp = Date.now() + TOKEN_TTL_MINUTES * 60_000;
     const stToken = signToken({ kind: "student", studentId: student.id, label: claims.label, exp }, SECRET);
@@ -183,17 +185,67 @@ app.get("/api/teacher-roster", (req, res) => {
 
   let contributingStudents = 0;
   const allWords = [];
-  const roster = students.filter((s) => s.label === claims.label).map((s) => {
+  const classIdFilter = req.query.classId;
+  let scopedStudents = students.filter((s) => s.label === claims.label);
+  if (classIdFilter === "none") {
+    scopedStudents = scopedStudents.filter((s) => !s.classId);
+  } else if (classIdFilter) {
+    scopedStudents = scopedStudents.filter((s) => s.classId === classIdFilter);
+  }
+  const roster = scopedStudents.map((s) => {
     const studentSessions = sessions.filter((sess) => sess.studentId === s.id);
     if (studentSessions.length > 0) {
       contributingStudents += 1;
       for (const sess of studentSessions) allWords.push(...(sess.log || []));
     }
     const lastSessionAt = studentSessions.reduce((latest, sess) => (!latest || sess.finishedAt > latest ? sess.finishedAt : latest), null);
-    return { id: s.id, fullName: s.fullName, createdAt: s.createdAt, lastLoginAt: s.lastLoginAt, sessionCount: studentSessions.length, lastSessionAt };
+    return { id: s.id, fullName: s.fullName, createdAt: s.createdAt, lastLoginAt: s.lastLoginAt, classId: s.classId, sessionCount: studentSessions.length, lastSessionAt };
   });
   const classStats = { ...computeStatsBreakdown(allWords), studentCount: contributingStudents };
-  return res.status(200).json({ students: roster, classStats });
+  const teacherClasses = classes.filter((c) => c.label === claims.label).map((c) => ({ id: c.id, name: c.name }));
+  return res.status(200).json({ students: roster, classStats, classes: teacherClasses });
+});
+
+app.post("/api/teacher-roster", (req, res) => {
+  const authHeader = req.headers["authorization"] || "";
+  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
+  const claims = verifyToken(token, SECRET);
+  if (!claims || claims.kind === "student") return res.status(401).json({ error: "Missing or expired access token", tokenInvalid: true });
+  const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+  if (!name || name.length > 60) return res.status(400).json({ error: "Class name must be 1-60 characters" });
+  const cls = { id: String(nextClassId++), name, label: claims.label };
+  classes.push(cls);
+  return res.status(200).json({ class: { id: cls.id, name: cls.name } });
+});
+
+app.patch("/api/teacher-roster", (req, res) => {
+  const authHeader = req.headers["authorization"] || "";
+  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
+  const claims = verifyToken(token, SECRET);
+  if (!claims || claims.kind === "student") return res.status(401).json({ error: "Missing or expired access token", tokenInvalid: true });
+
+  if (req.body?.kind === "renameClass") {
+    const cls = classes.find((c) => c.id === req.body.classId && c.label === claims.label);
+    if (!cls) return res.status(404).json({ error: "Class not found" });
+    const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+    if (!name || name.length > 60) return res.status(400).json({ error: "Class name must be 1-60 characters" });
+    cls.name = name;
+    return res.status(200).json({ ok: true });
+  }
+
+  if (req.body?.kind === "assignStudent") {
+    const student = students.find((s) => s.id === req.body.studentId && s.label === claims.label);
+    if (!student) return res.status(404).json({ error: "Student not found" });
+    const classId = req.body?.classId ?? null;
+    if (classId !== null) {
+      const cls = classes.find((c) => c.id === classId && c.label === claims.label);
+      if (!cls) return res.status(404).json({ error: "Class not found" });
+    }
+    student.classId = classId;
+    return res.status(200).json({ ok: true });
+  }
+
+  return res.status(400).json({ error: "Invalid kind" });
 });
 
 app.delete("/api/teacher-roster", (req, res) => {
@@ -201,6 +253,16 @@ app.delete("/api/teacher-roster", (req, res) => {
   const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
   const claims = verifyToken(token, SECRET);
   if (!claims || claims.kind === "student") return res.status(401).json({ error: "Missing or expired access token", tokenInvalid: true });
+
+  if (req.query.classId) {
+    const idx = classes.findIndex((c) => c.id === req.query.classId && c.label === claims.label);
+    if (idx === -1) return res.status(404).json({ error: "Class not found" });
+    classes.splice(idx, 1);
+    // ON DELETE SET NULL equivalent: unassign, don't delete, the students.
+    for (const s of students) if (s.classId === req.query.classId) s.classId = null;
+    return res.status(200).json({ ok: true });
+  }
+
   const idx = students.findIndex((s) => s.id === req.query.studentId && s.label === claims.label);
   if (idx === -1) return res.status(404).json({ error: "Student not found" });
   students.splice(idx, 1);

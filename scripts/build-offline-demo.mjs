@@ -64,9 +64,10 @@ const mockScript = String.raw`
 ` + mockLogicBody + `
 
   /* ---------------- in-memory "database" (resets on page reload) ---------------- */
-  var nextStudentId = 1, nextSessionId = 1;
+  var nextStudentId = 1, nextSessionId = 1, nextClassId = 1;
   var students = [];
   var sessions = [];
+  var classes = [];
   var quotaUsedToday = 0;
 
   function jsonResponse(status, body) {
@@ -139,7 +140,7 @@ const mockScript = String.raw`
           if (mode === "signup") {
             var dup = students.some(function (s) { return s.label === claims2.label && s.fullNameKey === nameKey; });
             if (dup) { resolve(jsonResponse(409, { error: "That name is already registered. Try Returning Student instead." })); return; }
-            var student = { id: String(nextStudentId++), fullName: fullName.trim(), fullNameKey: nameKey, secret: secret, avatarConfig: avatarConfig, label: claims2.label, createdAt: new Date().toISOString(), lastLoginAt: null };
+            var student = { id: String(nextStudentId++), fullName: fullName.trim(), fullNameKey: nameKey, secret: secret, avatarConfig: avatarConfig, label: claims2.label, createdAt: new Date().toISOString(), lastLoginAt: null, classId: null };
             students.push(student);
             var stToken = makeToken({ kind: "student", studentId: student.id, label: claims2.label });
             var stClaims = readToken(stToken);
@@ -229,9 +230,16 @@ const mockScript = String.raw`
             }));
             return;
           }
+          var classIdFilter = u.searchParams.get("classId");
+          var scopedStudents = students.filter(function (s) { return s.label === claims7.label; });
+          if (classIdFilter === "none") {
+            scopedStudents = scopedStudents.filter(function (s) { return !s.classId; });
+          } else if (classIdFilter) {
+            scopedStudents = scopedStudents.filter(function (s) { return s.classId === classIdFilter; });
+          }
           var contributingStudents = 0;
           var allWords = [];
-          var roster = students.filter(function (s) { return s.label === claims7.label; }).map(function (s) {
+          var roster = scopedStudents.map(function (s) {
             var studentSessions2 = sessions.filter(function (sess) { return sess.studentId === s.id; });
             if (studentSessions2.length > 0) {
               contributingStudents += 1;
@@ -239,17 +247,66 @@ const mockScript = String.raw`
             }
             var lastSessionAt = null;
             studentSessions2.forEach(function (sess) { if (!lastSessionAt || sess.finishedAt > lastSessionAt) lastSessionAt = sess.finishedAt; });
-            return { id: s.id, fullName: s.fullName, createdAt: s.createdAt, lastLoginAt: s.lastLoginAt, sessionCount: studentSessions2.length, lastSessionAt: lastSessionAt };
+            return { id: s.id, fullName: s.fullName, createdAt: s.createdAt, lastLoginAt: s.lastLoginAt, classId: s.classId, sessionCount: studentSessions2.length, lastSessionAt: lastSessionAt };
           });
           var classStats = computeStatsBreakdown(allWords);
           classStats.studentCount = contributingStudents;
-          resolve(jsonResponse(200, { students: roster, classStats: classStats }));
+          var teacherClasses = classes.filter(function (c) { return c.label === claims7.label; }).map(function (c) { return { id: c.id, name: c.name }; });
+          resolve(jsonResponse(200, { students: roster, classStats: classStats, classes: teacherClasses }));
+          return;
+        }
+
+        if (pathname === "/api/teacher-roster" && method === "POST") {
+          var claimsPost = getClaims(headersInit);
+          if (!claimsPost || claimsPost.kind === "student") { resolve(jsonResponse(401, { error: "Missing or expired access token", tokenInvalid: true })); return; }
+          var newClassName = typeof body.name === "string" ? body.name.trim() : "";
+          if (!newClassName || newClassName.length > 60) { resolve(jsonResponse(400, { error: "Class name must be 1-60 characters" })); return; }
+          var newCls = { id: String(nextClassId++), name: newClassName, label: claimsPost.label };
+          classes.push(newCls);
+          resolve(jsonResponse(200, { class: { id: newCls.id, name: newCls.name } }));
+          return;
+        }
+
+        if (pathname === "/api/teacher-roster" && method === "PATCH") {
+          var claimsPatch = getClaims(headersInit);
+          if (!claimsPatch || claimsPatch.kind === "student") { resolve(jsonResponse(401, { error: "Missing or expired access token", tokenInvalid: true })); return; }
+          if (body.kind === "renameClass") {
+            var clsToRename = classes.find(function (c) { return c.id === body.classId && c.label === claimsPatch.label; });
+            if (!clsToRename) { resolve(jsonResponse(404, { error: "Class not found" })); return; }
+            var renamedTo = typeof body.name === "string" ? body.name.trim() : "";
+            if (!renamedTo || renamedTo.length > 60) { resolve(jsonResponse(400, { error: "Class name must be 1-60 characters" })); return; }
+            clsToRename.name = renamedTo;
+            resolve(jsonResponse(200, { ok: true }));
+            return;
+          }
+          if (body.kind === "assignStudent") {
+            var studentToMove = students.find(function (s) { return s.id === body.studentId && s.label === claimsPatch.label; });
+            if (!studentToMove) { resolve(jsonResponse(404, { error: "Student not found" })); return; }
+            var targetClassId = body.classId === undefined ? null : body.classId;
+            if (targetClassId !== null) {
+              var targetCls = classes.find(function (c) { return c.id === targetClassId && c.label === claimsPatch.label; });
+              if (!targetCls) { resolve(jsonResponse(404, { error: "Class not found" })); return; }
+            }
+            studentToMove.classId = targetClassId;
+            resolve(jsonResponse(200, { ok: true }));
+            return;
+          }
+          resolve(jsonResponse(400, { error: "Invalid kind" }));
           return;
         }
 
         if (pathname === "/api/teacher-roster" && method === "DELETE") {
           var claims8 = getClaims(headersInit);
           if (!claims8 || claims8.kind === "student") { resolve(jsonResponse(401, { error: "Missing or expired access token", tokenInvalid: true })); return; }
+          var delClassId = u.searchParams.get("classId");
+          if (delClassId) {
+            var classIdx = classes.findIndex(function (c) { return c.id === delClassId && c.label === claims8.label; });
+            if (classIdx === -1) { resolve(jsonResponse(404, { error: "Class not found" })); return; }
+            classes.splice(classIdx, 1);
+            students.forEach(function (s) { if (s.classId === delClassId) s.classId = null; });
+            resolve(jsonResponse(200, { ok: true }));
+            return;
+          }
           var delStudentId = u.searchParams.get("studentId");
           var idx2 = students.findIndex(function (s) { return s.id === delStudentId && s.label === claims8.label; });
           if (idx2 === -1) { resolve(jsonResponse(404, { error: "Student not found" })); return; }

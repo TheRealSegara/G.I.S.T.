@@ -15,6 +15,22 @@
 
 create extension if not exists pgcrypto;
 
+-- One row per class a teacher creates to group a subset of their own
+-- students (e.g. "4A", "Reading Group 2") for File Box roster/report
+-- purposes. Scoped to access_code_label the same way students are, since
+-- one access code can represent a whole school where a teacher only
+-- wants to see their own class's roster and stats, not everyone sharing
+-- the code. A student is in at most one class at a time (or none --
+-- see students.class_id below), not a many-to-many membership.
+create table if not exists classes (
+  id uuid primary key default gen_random_uuid(),
+  access_code_label text not null,
+  name text not null,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists classes_access_code_label_idx on classes (access_code_label);
+
 -- One row per student account. Scoped to the access-code label (the
 -- teacher/school identity from ACCESS_CODES, see .env.example) rather
 -- than a global namespace, so two different schools can each enroll a
@@ -32,6 +48,15 @@ create table if not exists students (
 
 create unique index if not exists students_access_code_name_key
   on students (access_code_label, full_name_key);
+
+-- Added after the table already existed in earlier deployments; safe to
+-- re-run against a fresh database too. Nullable and defaults to null, so
+-- every already-enrolled student naturally starts "Unassigned" -- no
+-- backfill needed, matching the fact that not every student has to be
+-- in a class. ON DELETE SET NULL: deleting a class un-assigns its
+-- students instead of deleting the student accounts themselves.
+alter table students add column if not exists class_id uuid references classes(id) on delete set null;
+create index if not exists students_class_id_idx on students (class_id);
 
 -- One row per passage attempt (from picking a word to the whole-passage
 -- comprehension check). diagnostic_report caches the AI-generated
@@ -90,6 +115,7 @@ alter table session_words add column if not exists min_gate_sec int;
 
 create index if not exists session_words_session_id_idx on session_words (session_id);
 
+alter table classes enable row level security;
 alter table students enable row level security;
 alter table sessions enable row level security;
 alter table session_words enable row level security;

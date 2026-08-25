@@ -993,8 +993,32 @@ async function saveSession(payload) {
   return apiRequest("/api/session", { method: "POST", token: currentStudentToken, body: payload });
 }
 
-async function fetchTeacherRoster() {
-  return apiRequest("/api/teacher-roster", { token: currentAuthToken });
+// classId: omit for the whole roster, a class id string to scope to that
+// class, or "none" (the server's sentinel, see _teacherRosterHandler.js)
+// for students not currently assigned to any class.
+async function fetchTeacherRoster(classId) {
+  const qs = classId ? `?classId=${encodeURIComponent(classId)}` : "";
+  return apiRequest(`/api/teacher-roster${qs}`, { token: currentAuthToken });
+}
+
+async function createClass(name) {
+  return apiRequest("/api/teacher-roster", { method: "POST", token: currentAuthToken, body: { name } });
+}
+
+async function renameClass(classId, name) {
+  return apiRequest("/api/teacher-roster", { method: "PATCH", token: currentAuthToken, body: { kind: "renameClass", classId, name } });
+}
+
+// classId is a class's id string, or null to move the student back to
+// "Unassigned".
+async function assignStudentToClass(studentId, classId) {
+  return apiRequest("/api/teacher-roster", { method: "PATCH", token: currentAuthToken, body: { kind: "assignStudent", studentId, classId } });
+}
+
+// Deleting a class never deletes its students — the server unassigns them
+// back to "Unassigned" instead (ON DELETE SET NULL, see schema.sql).
+async function deleteClass(classId) {
+  return apiRequest(`/api/teacher-roster?classId=${encodeURIComponent(classId)}`, { method: "DELETE", token: currentAuthToken });
 }
 
 async function fetchStudentSessions(studentId) {
@@ -5652,16 +5676,81 @@ function FileBoxScreen({ onBack }) {
   const [deleteStudentTarget, setDeleteStudentTarget] = useState(null); // roster entry pending delete confirmation, or null
   const [deleteSessionTarget, setDeleteSessionTarget] = useState(null); // session pending delete confirmation, or null
 
+  // Class grouping: not every student has to be in a class (see
+  // schema.sql's students.class_id), so the roster can be scoped to
+  // "All" (null), one real class (its id), or "Unassigned" ("none", the
+  // server's sentinel -- see _teacherRosterHandler.js). classStats comes
+  // back from the server already computed for whichever scope is active,
+  // so the "At a Glance" rollup stays accurate to what's actually shown.
+  const [classes, setClasses] = useState([]);
+  const [selectedClassId, setSelectedClassId] = useState(null);
+  const [rosterRefreshKey, setRosterRefreshKey] = useState(0);
+  const [showAddClass, setShowAddClass] = useState(false);
+  const [newClassName, setNewClassName] = useState("");
+  const [classActionError, setClassActionError] = useState(null);
+  const [classActionBusy, setClassActionBusy] = useState(false);
+  const [renamingClassId, setRenamingClassId] = useState(null);
+  const [renameClassName, setRenameClassName] = useState("");
+  const [deleteClassTarget, setDeleteClassTarget] = useState(null); // {id, name} pending delete confirmation, or null
+
+  const rosterRequestRef = useRef(0);
   useEffect(() => {
-    let cancelled = false;
     setRosterLoading(true);
     setRosterError(null);
-    fetchTeacherRoster()
-      .then((data) => { if (!cancelled) { setRoster(data.students); setClassStats(data.classStats || null); } })
-      .catch((e) => { if (!cancelled) setRosterError(e.message || "Couldn't load the roster"); })
-      .finally(() => { if (!cancelled) setRosterLoading(false); });
-    return () => { cancelled = true; };
-  }, []);
+    const requestId = ++rosterRequestRef.current;
+    fetchTeacherRoster(selectedClassId)
+      .then((data) => {
+        if (requestId !== rosterRequestRef.current) return;
+        setRoster(data.students);
+        setClassStats(data.classStats || null);
+        setClasses(data.classes || []);
+      })
+      .catch((e) => { if (requestId === rosterRequestRef.current) setRosterError(e.message || "Couldn't load the roster"); })
+      .finally(() => { if (requestId === rosterRequestRef.current) setRosterLoading(false); });
+  }, [selectedClassId, rosterRefreshKey]);
+
+  async function handleCreateClass() {
+    const name = newClassName.trim();
+    if (!name || classActionBusy) return;
+    setClassActionBusy(true);
+    setClassActionError(null);
+    try {
+      await createClass(name);
+      setNewClassName("");
+      setShowAddClass(false);
+      setRosterRefreshKey((k) => k + 1);
+    } catch (e) {
+      setClassActionError(e.message || "Couldn't create the class");
+    } finally {
+      setClassActionBusy(false);
+    }
+  }
+
+  async function handleRenameClass(classId) {
+    const name = renameClassName.trim();
+    if (!name || classActionBusy) return;
+    setClassActionBusy(true);
+    setClassActionError(null);
+    try {
+      await renameClass(classId, name);
+      setRenamingClassId(null);
+      setRosterRefreshKey((k) => k + 1);
+    } catch (e) {
+      setClassActionError(e.message || "Couldn't rename the class");
+    } finally {
+      setClassActionBusy(false);
+    }
+  }
+
+  async function handleAssignStudent(studentId, classId) {
+    setClassActionError(null);
+    try {
+      await assignStudentToClass(studentId, classId || null);
+      setRosterRefreshKey((k) => k + 1);
+    } catch (e) {
+      setClassActionError(e.message || "Couldn't move this student");
+    }
+  }
 
   // Both fetches below are keyed by an incrementing request id rather than
   // a simple "cancelled" flag: a teacher can tap one student/session, then
@@ -5820,18 +5909,134 @@ function FileBoxScreen({ onBack }) {
       <h1 className="font-display text-2xl font-800 text-stone-700 mb-1 relative z-10">🗃️ File Box</h1>
       <p className="font-body text-xs text-stone-500 mb-5 relative z-10">Every student who's signed up under this access code, and their past progress.</p>
 
+      {/* Class scope: not every student has to be in a class -- pick "All
+          students" (the whole access-code roster), one real class, or
+          "Unassigned". The roster list and the At a Glance rollup below
+          both come straight from the server already scoped to this. */}
+      <div className="flex flex-wrap items-center gap-2 mb-3 relative z-10">
+        <button
+          onClick={() => { SFX.tap(); setSelectedClassId(null); }}
+          className="font-display font-700 text-xs rounded-full px-3 py-1.5 border-2 transition-all"
+          style={selectedClassId === null ? { background: "#0d9488", color: "white", borderColor: "#0d9488" } : { background: "white", color: "#57534e", borderColor: "#d6d3d1" }}
+        >
+          All students
+        </button>
+        {classes.map((c) => (
+          <button
+            key={c.id}
+            onClick={() => { SFX.tap(); setSelectedClassId(c.id); }}
+            className="font-display font-700 text-xs rounded-full px-3 py-1.5 border-2 transition-all"
+            style={selectedClassId === c.id ? { background: "#0d9488", color: "white", borderColor: "#0d9488" } : { background: "white", color: "#57534e", borderColor: "#d6d3d1" }}
+          >
+            {c.name}
+          </button>
+        ))}
+        <button
+          onClick={() => { SFX.tap(); setSelectedClassId("none"); }}
+          className="font-display font-700 text-xs rounded-full px-3 py-1.5 border-2 transition-all"
+          style={selectedClassId === "none" ? { background: "#0d9488", color: "white", borderColor: "#0d9488" } : { background: "white", color: "#57534e", borderColor: "#d6d3d1" }}
+        >
+          Unassigned
+        </button>
+        {!showAddClass && (
+          <button
+            onClick={() => { SFX.tap(); setShowAddClass(true); setClassActionError(null); }}
+            className="font-display font-700 text-xs text-teal-700 rounded-full px-3 py-1.5 border-2 border-dashed"
+            style={{ borderColor: "#0d9488" }}
+          >
+            + New class
+          </button>
+        )}
+      </div>
+
+      {showAddClass && (
+        <div className="flex items-center gap-2 mb-3 relative z-10">
+          <input
+            value={newClassName}
+            onChange={(e) => setNewClassName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") handleCreateClass(); }}
+            placeholder="Class name, e.g. 4A"
+            aria-label="New class name"
+            autoFocus
+            maxLength={60}
+            className="flex-1 bg-white rounded-full border-2 border-stone-300 px-4 py-2 font-body text-sm text-stone-700 focus:outline-none focus:border-teal-400"
+          />
+          <button
+            onClick={handleCreateClass}
+            disabled={!newClassName.trim() || classActionBusy}
+            className="font-display font-700 text-xs text-white bg-teal-600 rounded-full px-4 py-2 disabled:opacity-40"
+          >
+            Add
+          </button>
+          <button onClick={() => { setShowAddClass(false); setNewClassName(""); }} className="font-body text-xs text-stone-500">
+            Cancel
+          </button>
+        </div>
+      )}
+
+      {selectedClassId && selectedClassId !== "none" && (() => {
+        const current = classes.find((c) => c.id === selectedClassId);
+        if (!current) return null;
+        return renamingClassId === current.id ? (
+          <div className="flex items-center gap-2 mb-3 relative z-10">
+            <input
+              value={renameClassName}
+              onChange={(e) => setRenameClassName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") handleRenameClass(current.id); }}
+              aria-label="Rename class"
+              autoFocus
+              maxLength={60}
+              className="flex-1 bg-white rounded-full border-2 border-stone-300 px-4 py-2 font-body text-sm text-stone-700 focus:outline-none focus:border-teal-400"
+            />
+            <button
+              onClick={() => handleRenameClass(current.id)}
+              disabled={!renameClassName.trim() || classActionBusy}
+              className="font-display font-700 text-xs text-white bg-teal-600 rounded-full px-4 py-2 disabled:opacity-40"
+            >
+              Save
+            </button>
+            <button onClick={() => setRenamingClassId(null)} className="font-body text-xs text-stone-500">Cancel</button>
+          </div>
+        ) : (
+          <div className="flex items-center gap-3 mb-3 relative z-10">
+            <button
+              onClick={() => { SFX.tap(); setRenamingClassId(current.id); setRenameClassName(current.name); }}
+              className="font-body text-xs text-stone-500 underline"
+            >
+              ✏️ Rename "{current.name}"
+            </button>
+            <button onClick={() => { SFX.tap(); setDeleteClassTarget(current); }} className="font-body text-xs text-rose-600 underline">
+              🗑️ Delete class
+            </button>
+          </div>
+        );
+      })()}
+
+      {classActionError && <p className="font-body text-xs text-rose-600 mb-3 relative z-10">{classActionError}</p>}
+
       {rosterLoading && <p className="font-hand text-lg text-stone-500 relative z-10">Loading…</p>}
       {rosterError && <p className="font-body text-sm text-rose-600 relative z-10">{rosterError}</p>}
       {roster && roster.length === 0 && (
-        <p className="font-body text-sm text-stone-500 relative z-10">No students yet. They'll show up here once someone signs up as a new student.</p>
+        <p className="font-body text-sm text-stone-500 relative z-10">
+          {selectedClassId === "none"
+            ? "No unassigned students right now — everyone's in a class."
+            : selectedClassId
+            ? "No students in this class yet. Move some in from another view, or wait for new sign-ups."
+            : "No students yet. They'll show up here once someone signs up as a new student."}
+        </p>
       )}
 
       {classStats && classStats.total >= 3 && (() => {
         const rate = Math.round((classStats.independent / classStats.total) * 100);
         const weakest = weakestClueType(classStats.breakdown);
+        const scopeLabel = selectedClassId === "none"
+          ? "Unassigned Students"
+          : selectedClassId
+          ? classes.find((c) => c.id === selectedClassId)?.name || "This Class"
+          : "Whole Roster";
         return (
           <div className="mb-4 p-5 rounded-3xl relative z-10 step-in" style={{ background: "#dbeafe", border: "3px solid #2563eb" }}>
-            <p className="font-display font-800 text-xs uppercase tracking-wide text-blue-800 mb-2">📊 Whole Class, At a Glance</p>
+            <p className="font-display font-800 text-xs uppercase tracking-wide text-blue-800 mb-2">📊 {scopeLabel}, At a Glance</p>
             <p className="font-body text-sm text-blue-900 leading-relaxed">
               Across <b>{classStats.studentCount}</b> student{classStats.studentCount === 1 ? "" : "s"} and <b>{classStats.total}</b> word{classStats.total === 1 ? "" : "s"} attempted, <b>{rate}%</b> were solved independently.
               {weakest && (
@@ -5872,6 +6077,18 @@ function FileBoxScreen({ onBack }) {
                 {s.lastSessionAt ? ` · last played ${new Date(s.lastSessionAt).toLocaleDateString()}` : ""}
               </p>
             </button>
+            <select
+              value={s.classId || ""}
+              onChange={(e) => handleAssignStudent(s.id, e.target.value)}
+              aria-label={`Move ${s.fullName} to a class`}
+              title={`Move ${s.fullName} to a class`}
+              className="shrink-0 font-body text-xs text-stone-600 bg-white rounded-full px-2.5 py-2.5 border-2 border-stone-300 focus:outline-none max-w-[110px]"
+            >
+              <option value="">Unassigned</option>
+              {classes.map((c) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
             <button
               onClick={() => { SFX.tap(); setResetSuccessName(null); setResetTarget(s); }}
               className="shrink-0 w-11 h-11 rounded-full bg-white flex items-center justify-center text-base"
@@ -5911,6 +6128,24 @@ function FileBoxScreen({ onBack }) {
             await deleteStudentAccount(deleteStudentTarget.id);
             setRoster((prev) => prev.filter((r) => r.id !== deleteStudentTarget.id));
             setDeleteStudentTarget(null);
+            // The instant filter above keeps the list itself snappy, but
+            // classStats (studentCount/totals) needs a real refetch to
+            // stay accurate now that this student's words are gone.
+            setRosterRefreshKey((k) => k + 1);
+          }}
+        />
+      )}
+
+      {deleteClassTarget && (
+        <ConfirmDeleteModal
+          heading={`Delete "${deleteClassTarget.name}"?`}
+          message={`This deletes the class itself, not its students — they move back to "Unassigned", nothing about their accounts or progress changes.`}
+          onCancel={() => setDeleteClassTarget(null)}
+          onConfirm={async () => {
+            await deleteClass(deleteClassTarget.id);
+            if (selectedClassId === deleteClassTarget.id) setSelectedClassId(null);
+            setDeleteClassTarget(null);
+            setRosterRefreshKey((k) => k + 1);
           }}
         />
       )}
