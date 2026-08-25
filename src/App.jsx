@@ -1637,16 +1637,18 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, onViewDemoR
               <p className="font-body text-sm text-stone-600 leading-relaxed mb-5 max-w-[220px]">
                 Choose a map and work through the words with your coach, tapping, spelling, and typing your way to each answer.
               </p>
-              <BigButton onClick={() => { setAuthError(null); setMode("student-choice"); }}>
-                <Play className="inline w-4 h-4 mr-1.5 fill-current" /> Start Playing
-              </BigButton>
-              <button
-                onClick={() => { SFX.tap(); setAfterTour("menu"); setMode("tour"); }}
-                className="mt-3 font-display font-700 text-xs text-amber-700 hover:text-amber-900 bg-white rounded-full px-3 py-1.5 border-2"
-                style={{ borderColor: "#f59e0b" }}
-              >
-                ❓ How to play (see the tutorial again)
-              </button>
+              <div className="flex flex-col items-center gap-2 w-full">
+                <BigButton className="w-72" onClick={() => { setAuthError(null); setMode("student-choice"); }}>
+                  <Play className="inline w-4 h-4 mr-1.5 fill-current" /> Start Playing
+                </BigButton>
+                <button
+                  onClick={() => { SFX.tap(); setAfterTour("menu"); setMode("tour"); }}
+                  className="w-72 font-display font-700 text-xs text-amber-700 hover:text-amber-900 bg-white rounded-full px-3 py-1.5 border-2"
+                  style={{ borderColor: "#f59e0b" }}
+                >
+                  ❓ How to play (see the tutorial again)
+                </button>
+              </div>
             </div>
 
             {/* Divider */}
@@ -1659,14 +1661,14 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, onViewDemoR
               <p className="font-body text-sm text-stone-600 leading-relaxed mb-5 max-w-[240px]">
                 Paste any passage and G.I.S.T. picks the target words for you, ready in under a minute for your student to play.
               </p>
-              <BigButton variant="outline" onClick={() => { setMode("maker"); setMakerSaved(false); }}>
-                <Wrench className="inline w-4 h-4 mr-1.5" /> Create a Custom Map
-              </BigButton>
-              <div className="flex items-center gap-3 mt-3 flex-wrap justify-center">
+              <div className="flex flex-col items-center gap-2 w-full">
+                <BigButton variant="outline" className="w-72" onClick={() => { setMode("maker"); setMakerSaved(false); }}>
+                  <Wrench className="inline w-4 h-4 mr-1.5" /> Create a Custom Map
+                </BigButton>
                 {onViewDemoReport && (
                   <button
                     onClick={() => { SFX.tap(); onViewDemoReport(); }}
-                    className="font-display font-700 text-xs text-red-700 hover:text-red-900 bg-white rounded-full px-3 py-1.5 border-2"
+                    className="w-72 font-display font-700 text-xs text-red-700 hover:text-red-900 bg-white rounded-full px-3 py-1.5 border-2"
                     style={{ borderColor: "#dc2626" }}
                   >
                     🔦 See a sample report
@@ -1675,7 +1677,7 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, onViewDemoR
                 {onOpenFileBox && (
                   <button
                     onClick={() => { SFX.tap(); onOpenFileBox(); }}
-                    className="font-display font-700 text-xs text-blue-700 hover:text-blue-900 bg-white rounded-full px-3 py-1.5 border-2"
+                    className="w-72 font-display font-700 text-xs text-blue-700 hover:text-blue-900 bg-white rounded-full px-3 py-1.5 border-2"
                     style={{ borderColor: "#2563eb" }}
                   >
                     🗃️ File Box
@@ -1684,7 +1686,7 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, onViewDemoR
                 {onOpenTeacherGuide && (
                   <button
                     onClick={() => { SFX.tap(); onOpenTeacherGuide(); }}
-                    className="font-display font-700 text-xs text-teal-700 hover:text-teal-900 bg-white rounded-full px-3 py-1.5 border-2"
+                    className="w-72 font-display font-700 text-xs text-teal-700 hover:text-teal-900 bg-white rounded-full px-3 py-1.5 border-2"
                     style={{ borderColor: "#0d9488" }}
                   >
                     ❓ How G.I.S.T. works
@@ -1693,7 +1695,7 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, onViewDemoR
                 {onOpenBuildYourOwn && (
                   <button
                     onClick={() => { SFX.tap(); onOpenBuildYourOwn(); }}
-                    className="font-display font-700 text-xs text-violet-700 hover:text-violet-900 bg-white rounded-full px-3 py-1.5 border-2"
+                    className="w-72 font-display font-700 text-xs text-violet-700 hover:text-violet-900 bg-white rounded-full px-3 py-1.5 border-2"
                     style={{ borderColor: "#7c3aed" }}
                   >
                     🧭 Build Your Own G.I.S.T.
