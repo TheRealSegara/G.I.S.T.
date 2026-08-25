@@ -72,6 +72,21 @@ const mockScript = String.raw`
   function jsonResponse(status, body) {
     return new Response(JSON.stringify(body), { status: status, headers: { "Content-Type": "application/json" } });
   }
+  // Mirrors computeStatsBreakdown in api/_teacherRosterHandler.js, so this
+  // offline single-file demo shows the same class-rollup and cross-session
+  // callouts as the real deployed app.
+  var CLUE_TYPES = ["contrast", "definition", "example", "inference"];
+  function computeStatsBreakdown(words) {
+    var solved = words.filter(function (w) { return !w.skipped; });
+    var independent = solved.filter(function (w) { return w.hintsUsed === 0; }).length;
+    var withHelp = solved.filter(function (w) { return w.hintsUsed > 0; }).length;
+    var skipped = words.filter(function (w) { return w.skipped; }).length;
+    var breakdown = CLUE_TYPES.map(function (type) {
+      var inType = words.filter(function (w) { return w.clueType === type && !w.skipped; });
+      return { type: type, total: inType.length, independent: inType.filter(function (w) { return w.hintsUsed === 0; }).length };
+    }).filter(function (b) { return b.total > 0; });
+    return { total: words.length, independent: independent, withHelp: withHelp, skipped: skipped, breakdown: breakdown };
+  }
   function getClaims(headersInit) {
     var headers = new Headers(headersInit || {});
     var auth = headers.get("authorization") || headers.get("Authorization") || "";
@@ -203,19 +218,32 @@ const mockScript = String.raw`
             var studentDetail = students.find(function (s) { return s.id === qStudentId && s.label === claims7.label; });
             if (!studentDetail) { resolve(jsonResponse(404, { error: "Student not found" })); return; }
             var studentSessions = sessions.filter(function (s) { return s.studentId === qStudentId; });
+            var studentWords = [];
+            studentSessions.forEach(function (s) { studentWords = studentWords.concat(s.log || []); });
+            var studentStats = computeStatsBreakdown(studentWords);
+            studentStats.sessionCount = studentSessions.length;
             resolve(jsonResponse(200, {
               student: { id: studentDetail.id, fullName: studentDetail.fullName },
-              sessions: studentSessions.map(function (s) { return { id: s.id, passageTitle: s.passageTitle, passageEmoji: s.passageEmoji, startedAt: s.startedAt, finishedAt: s.finishedAt, wordCount: (s.log || []).length, comprehensionCorrect: s.comprehensionResult ? (s.comprehensionResult.correct === undefined ? null : s.comprehensionResult.correct) : null }; })
+              sessions: studentSessions.map(function (s) { return { id: s.id, passageTitle: s.passageTitle, passageEmoji: s.passageEmoji, startedAt: s.startedAt, finishedAt: s.finishedAt, wordCount: (s.log || []).length, comprehensionCorrect: s.comprehensionResult ? (s.comprehensionResult.correct === undefined ? null : s.comprehensionResult.correct) : null }; }),
+              studentStats: studentStats
             }));
             return;
           }
+          var contributingStudents = 0;
+          var allWords = [];
           var roster = students.filter(function (s) { return s.label === claims7.label; }).map(function (s) {
             var studentSessions2 = sessions.filter(function (sess) { return sess.studentId === s.id; });
+            if (studentSessions2.length > 0) {
+              contributingStudents += 1;
+              studentSessions2.forEach(function (sess) { allWords = allWords.concat(sess.log || []); });
+            }
             var lastSessionAt = null;
             studentSessions2.forEach(function (sess) { if (!lastSessionAt || sess.finishedAt > lastSessionAt) lastSessionAt = sess.finishedAt; });
             return { id: s.id, fullName: s.fullName, createdAt: s.createdAt, lastLoginAt: s.lastLoginAt, sessionCount: studentSessions2.length, lastSessionAt: lastSessionAt };
           });
-          resolve(jsonResponse(200, { students: roster }));
+          var classStats = computeStatsBreakdown(allWords);
+          classStats.studentCount = contributingStudents;
+          resolve(jsonResponse(200, { students: roster, classStats: classStats }));
           return;
         }
 

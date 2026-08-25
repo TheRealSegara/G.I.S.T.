@@ -20,17 +20,46 @@ const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_REQUESTS = 30;
 const checkRateLimit = createRateLimiter(RATE_LIMIT_WINDOW_MS, RATE_LIMIT_MAX_REQUESTS);
 
+// Same breakdown computeAtAGlance does client-side for one session's log
+// (src/App.jsx), applied here to a pooled set of session_words rows
+// spanning many sessions/students -- one student's whole history (the
+// "cross-session pattern" and "vs their own average" callouts in
+// TeacherScreen) or a whole class's (the File Box roster's class rollup).
+// Deliberately counts only, no AI: the same "blue box" trust boundary as
+// the rest of the deterministic parts of a report.
+const CLUE_TYPES = ["contrast", "definition", "example", "inference"];
+
+function computeStatsBreakdown(words) {
+  const solved = words.filter((w) => !w.skipped);
+  const independent = solved.filter((w) => w.hints_used === 0).length;
+  const withHelp = solved.filter((w) => w.hints_used > 0).length;
+  const skipped = words.filter((w) => w.skipped).length;
+  const breakdown = CLUE_TYPES
+    .map((type) => {
+      const inType = words.filter((w) => w.clue_type === type && !w.skipped);
+      return { type, total: inType.length, independent: inType.filter((w) => w.hints_used === 0).length };
+    })
+    .filter((b) => b.total > 0);
+  return { total: words.length, independent, withHelp, skipped, breakdown };
+}
+
 async function fetchRoster(supabase, label, res) {
   const { data: students, error } = await supabase
     .from("students")
-    .select("id, full_name, created_at, last_login_at, sessions(id, finished_at)")
+    .select("id, full_name, created_at, last_login_at, sessions(id, finished_at, session_words(clue_type, hints_used, skipped))")
     .eq("access_code_label", label)
     .order("full_name", { ascending: true });
   if (error) {
     return res.status(502).json({ error: "Couldn't load the roster, please try again" });
   }
+  let contributingStudents = 0;
+  const allWords = [];
   const roster = students.map((s) => {
     const finishedSessions = (s.sessions || []).filter((sess) => sess.finished_at);
+    if (finishedSessions.length > 0) {
+      contributingStudents += 1;
+      for (const sess of finishedSessions) allWords.push(...(sess.session_words || []));
+    }
     const lastSessionAt = finishedSessions.reduce(
       (latest, sess) => (!latest || sess.finished_at > latest ? sess.finished_at : latest),
       null
@@ -44,7 +73,8 @@ async function fetchRoster(supabase, label, res) {
       lastSessionAt,
     };
   });
-  return res.status(200).json({ students: roster });
+  const classStats = { ...computeStatsBreakdown(allWords), studentCount: contributingStudents };
+  return res.status(200).json({ students: roster, classStats });
 }
 
 async function fetchStudentSessions(supabase, label, studentId, res) {
@@ -59,26 +89,31 @@ async function fetchStudentSessions(supabase, label, studentId, res) {
 
   const { data: sessions, error: sessionsError } = await supabase
     .from("sessions")
-    .select("id, passage_title, passage_emoji, started_at, finished_at, comprehension_result, session_words(id)")
+    .select("id, passage_title, passage_emoji, started_at, finished_at, comprehension_result, session_words(id, clue_type, hints_used, skipped)")
     .eq("student_id", studentId)
     .order("started_at", { ascending: false });
   if (sessionsError) {
     return res.status(502).json({ error: "Couldn't load this student's sessions" });
   }
 
+  const finishedSessions = sessions.filter((s) => s.finished_at);
+  const studentStats = {
+    ...computeStatsBreakdown(finishedSessions.flatMap((s) => s.session_words || [])),
+    sessionCount: finishedSessions.length,
+  };
+
   return res.status(200).json({
     student: { id: student.id, fullName: student.full_name },
-    sessions: sessions
-      .filter((s) => s.finished_at)
-      .map((s) => ({
-        id: s.id,
-        passageTitle: s.passage_title,
-        passageEmoji: s.passage_emoji,
-        startedAt: s.started_at,
-        finishedAt: s.finished_at,
-        wordCount: (s.session_words || []).length,
-        comprehensionCorrect: s.comprehension_result?.correct ?? null,
-      })),
+    sessions: finishedSessions.map((s) => ({
+      id: s.id,
+      passageTitle: s.passage_title,
+      passageEmoji: s.passage_emoji,
+      startedAt: s.started_at,
+      finishedAt: s.finished_at,
+      wordCount: (s.session_words || []).length,
+      comprehensionCorrect: s.comprehension_result?.correct ?? null,
+    })),
+    studentStats,
   });
 }
 

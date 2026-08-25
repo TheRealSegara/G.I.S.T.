@@ -981,8 +981,7 @@ async function saveSession(payload) {
 }
 
 async function fetchTeacherRoster() {
-  const data = await apiRequest("/api/teacher-roster", { token: currentAuthToken });
-  return data.students;
+  return apiRequest("/api/teacher-roster", { token: currentAuthToken });
 }
 
 async function fetchStudentSessions(studentId) {
@@ -4109,19 +4108,56 @@ function BoldText({ text, className = "" }) {
   );
 }
 
-function renderInlineBold(text, boldColorClass) {
-  const parts = text.split(/(\*\*[^*]+\*\*)/g);
-  return parts.map((part, i) =>
-    part.startsWith("**") && part.endsWith("**") ? (
-      <strong key={i} className={boldColorClass}>{part.slice(2, -2)}</strong>
-    ) : (
-      <span key={i}>{part}</span>
-    )
+// Builds a case-insensitive, whole-word regex matching any of `words`
+// (longest first, so no word can shadow a longer one sharing a prefix).
+// null if there's nothing to link — callers treat that as "don't linkify".
+function buildWordLinkRegex(words) {
+  const unique = [...new Set((words || []).filter(Boolean).map((w) => w.toLowerCase()))];
+  if (unique.length === 0) return null;
+  const escaped = unique.sort((a, b) => b.length - a.length).map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  return new RegExp(`\\b(${escaped.join("|")})\\b`, "gi");
+}
+
+// Splits `text` on wordLinkRegex and wraps any piece that's actually one
+// of the known target words in a clickable button — the "click-to-
+// evidence" affordance: every word the AI report mentions can be tapped
+// to jump straight to that word's own row in the log table below, so a
+// claim can be checked against the raw data instead of just trusted.
+function linkifySegment(text, wordLinkRegex, wordSet, onWordClick, keyPrefix) {
+  return text.split(wordLinkRegex).map((piece, j) =>
+    piece && wordSet.has(piece.toLowerCase()) ? (
+      <button
+        key={`${keyPrefix}-${j}`}
+        type="button"
+        onClick={() => onWordClick(piece)}
+        className="underline decoration-dotted decoration-2 underline-offset-2 hover:decoration-solid bg-transparent p-0 m-0 cursor-pointer font-inherit"
+        style={{ color: "inherit" }}
+        title={`Jump to "${piece}" in the word log`}
+      >
+        {piece}
+      </button>
+    ) : piece
   );
 }
 
-function RichReportText({ text, className = "", boldColorClass = "text-inherit" }) {
+function renderInlineBold(text, boldColorClass, wordLinkRegex = null, wordSet = null, onWordClick = null) {
+  const parts = text.split(/(\*\*[^*]+\*\*)/g);
+  return parts.map((part, i) => {
+    const isBold = part.startsWith("**") && part.endsWith("**");
+    const inner = isBold ? part.slice(2, -2) : part;
+    const rendered = wordLinkRegex ? linkifySegment(inner, wordLinkRegex, wordSet, onWordClick, i) : inner;
+    return isBold ? (
+      <strong key={i} className={boldColorClass}>{rendered}</strong>
+    ) : (
+      <span key={i}>{rendered}</span>
+    );
+  });
+}
+
+function RichReportText({ text, className = "", boldColorClass = "text-inherit", linkWords = null, onWordClick = null }) {
   if (!text) return null;
+  const wordLinkRegex = linkWords && onWordClick ? buildWordLinkRegex(linkWords) : null;
+  const wordSet = wordLinkRegex ? new Set(linkWords.map((w) => w.toLowerCase())) : null;
   const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
   let seenHeadline = false;
   return (
@@ -4133,7 +4169,7 @@ function RichReportText({ text, className = "", boldColorClass = "text-inherit" 
           return (
             <div key={i} className="flex items-start gap-2 mt-1.5">
               <span className="mt-2 w-1.5 h-1.5 rounded-full bg-current shrink-0 opacity-60" />
-              <p className="text-[0.92em] leading-snug">{renderInlineBold(content, boldColorClass)}</p>
+              <p className="text-[0.92em] leading-snug">{renderInlineBold(content, boldColorClass, wordLinkRegex, wordSet, onWordClick)}</p>
             </div>
           );
         }
@@ -4144,7 +4180,7 @@ function RichReportText({ text, className = "", boldColorClass = "text-inherit" 
             key={i}
             className={isFirstHeadline ? "font-display font-800 text-[1.08em] leading-snug mb-1" : "text-[0.95em] leading-relaxed mt-1.5"}
           >
-            {renderInlineBold(content, boldColorClass)}
+            {renderInlineBold(content, boldColorClass, wordLinkRegex, wordSet, onWordClick)}
           </p>
         );
       })}
@@ -4537,6 +4573,18 @@ function answeredAtGateFloor(entry) {
   if (!entry || entry.skipped) return false;
   if (entry.timeToAnswerSec == null || entry.minGateSec == null) return false;
   return entry.timeToAnswerSec <= entry.minGateSec + GATE_FLOOR_SLACK_SEC;
+}
+
+// Picks the single weakest clue type from a breakdown (as returned by
+// computeAtAGlance or the server's matching computeStatsBreakdown), for
+// the cross-session and class-rollup callouts. Requires at least minTotal
+// attempts of that type before it's eligible, so one unlucky word doesn't
+// get reported as "a pattern" -- a single data point is noise, not
+// evidence, and this tool's whole premise is not over-claiming.
+function weakestClueType(breakdown, minTotal = 2) {
+  const eligible = (breakdown || []).filter((b) => b.total >= minTotal);
+  if (eligible.length === 0) return null;
+  return eligible.reduce((worst, b) => (b.independent / b.total < worst.independent / worst.total ? b : worst));
 }
 
 function computeAtAGlance(log) {
@@ -4953,15 +5001,44 @@ function DiagnosticReportSkeleton() {
   );
 }
 
-function TeacherScreen({ studentId, log, onBack, onReset, sessionStartedAt, comprehensionResult, isDemo = false, initialSummary = null, onDiagnosticGenerated = null, hideResetSection = false }) {
+function TeacherScreen({ studentId, realStudentId = null, log, onBack, onReset, sessionStartedAt, comprehensionResult, isDemo = false, initialSummary = null, onDiagnosticGenerated = null, hideResetSection = false }) {
   const [summary, setSummary] = useState(initialSummary);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [showHelp, setShowHelp] = useState(false);
   const [showFullDetails, setShowFullDetails] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  // Cross-session pattern (item 1) and growth-vs-history (item 3): both
+  // deterministic, both need this student's stats pooled across every
+  // session they've ever finished, not just the one being viewed here.
+  // realStudentId is the real DB student UUID, only available for a real,
+  // signed-in student (the sample report has none, isDemo covers that).
+  const [studentStats, setStudentStats] = useState(null);
+  useEffect(() => {
+    if (!realStudentId || isDemo) return;
+    let cancelled = false;
+    fetchStudentSessions(realStudentId)
+      .then((data) => { if (!cancelled) setStudentStats(data.studentStats || null); })
+      .catch(() => { /* silent: this is a bonus callout, not core report functionality */ });
+    return () => { cancelled = true; };
+  }, [realStudentId, isDemo]);
   const [teacherNotes, setTeacherNotes] = useState("");
   const quotaStatus = useQuotaStatus();
+
+  // Click-to-evidence: a word tapped inside the AI-written report jumps to
+  // and briefly highlights that word's own row in the log table below, so
+  // a claim can be checked against the raw data instead of just trusted.
+  const [highlightedWord, setHighlightedWord] = useState(null);
+  const highlightTimeoutRef = useRef(null);
+  useEffect(() => () => { if (highlightTimeoutRef.current) clearTimeout(highlightTimeoutRef.current); }, []);
+  function jumpToWordRow(word) {
+    const idx = log.findIndex((e) => e.word.toLowerCase() === word.toLowerCase());
+    if (idx === -1) return;
+    setHighlightedWord(word.toLowerCase());
+    document.getElementById(`word-log-row-${idx}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    if (highlightTimeoutRef.current) clearTimeout(highlightTimeoutRef.current);
+    highlightTimeoutRef.current = setTimeout(() => setHighlightedWord(null), 2500);
+  }
 
   async function handleDownload() {
     SFX.tap();
@@ -5115,6 +5192,15 @@ function TeacherScreen({ studentId, log, onBack, onReset, sessionStartedAt, comp
             <p className="font-display font-800 text-xl sm:text-2xl leading-snug text-teal-950">{summary.summary || summary.corePattern || summary.coreProblem}</p>
           </div>
 
+          {/* Legend: always visible (not gated behind "See full details"),
+              so what's counted vs. what's AI judgment is clear before a
+              teacher even opens the detail sections. */}
+          <div className="flex items-center justify-center gap-5 flex-wrap font-display font-800 text-[11px] uppercase tracking-wide text-stone-500">
+            <span className="flex items-center gap-1.5"><i className="inline-block w-3.5 h-3.5 rounded" style={{ background: "#dbeafe", border: "2px solid #2563eb" }} /> Counted from log, not AI</span>
+            <span className="flex items-center gap-1.5"><i className="inline-block w-3.5 h-3.5 rounded" style={{ background: "#fef3c7", border: "2px solid #d97706" }} /> AI-analyzed</span>
+            <span className="flex items-center gap-1.5"><i className="inline-block w-3.5 h-3.5 rounded" style={{ background: "#fee2e2", border: "2px solid #dc2626" }} /> Headline diagnosis</span>
+          </div>
+
           {/* At a Glance / Story Understanding: plain counts, not prose,
               so these stay visible by default even with details collapsed. */}
           <div className="grid grid-cols-2 gap-4">
@@ -5150,6 +5236,28 @@ function TeacherScreen({ studentId, log, onBack, onReset, sessionStartedAt, comp
             </div>
           </div>
 
+          {studentStats && studentStats.sessionCount >= 2 && (() => {
+            const sessionSolved = glance.independent + glance.withHelp;
+            const sessionRate = sessionSolved > 0 ? Math.round((glance.independent / sessionSolved) * 100) : null;
+            const overallSolved = studentStats.independent + studentStats.withHelp;
+            const overallRate = overallSolved > 0 ? Math.round((studentStats.independent / overallSolved) * 100) : null;
+            const weakest = weakestClueType(studentStats.breakdown);
+            return (
+              <div className="p-5 rounded-3xl" style={{ background: "#dbeafe", border: "3px solid #2563eb" }}>
+                <p className="font-display font-800 text-xs uppercase tracking-wide text-blue-800 mb-2">📈 Compared To Their Own History</p>
+                <p className="font-body text-sm text-blue-900 leading-relaxed">
+                  {sessionRate !== null && overallRate !== null && (
+                    <>This session: <b>{sessionRate}%</b> solved independently, vs an overall average of <b>{overallRate}%</b> across their {studentStats.sessionCount} tracked sessions. </>
+                  )}
+                  {weakest && (
+                    <><b className="capitalize">{weakest.type}</b>-clue words have needed the most help across their history — {weakest.independent}/{weakest.total} independent.</>
+                  )}
+                </p>
+                <p className="font-body text-[11px] text-blue-600 mt-2">🔢 Counted directly from their logged sessions, not AI</p>
+              </div>
+            );
+          })()}
+
           <div className="text-center">
             <button
               onClick={() => { SFX.tap(); setShowFullDetails((s) => !s); }}
@@ -5161,28 +5269,22 @@ function TeacherScreen({ studentId, log, onBack, onReset, sessionStartedAt, comp
 
           {showFullDetails && (
             <div className="space-y-4 step-in">
-              {/* Legend */}
-              <div className="flex items-center justify-center gap-5 flex-wrap font-display font-800 text-[11px] uppercase tracking-wide text-stone-500">
-                <span className="flex items-center gap-1.5"><i className="inline-block w-3.5 h-3.5 rounded" style={{ background: "#fef3c7", border: "2px solid #d97706" }} /> AI-analyzed</span>
-                <span className="flex items-center gap-1.5"><i className="inline-block w-3.5 h-3.5 rounded" style={{ background: "#fee2e2", border: "2px solid #dc2626" }} /> Headline diagnosis</span>
-              </div>
-
               {/* 1. The Pattern */}
               <div className="p-6 rounded-3xl text-center" style={{ background: "#fee2e2", border: "4px solid #dc2626" }}>
                 <p className="font-display font-800 text-xs uppercase tracking-wide text-red-800 mb-2">🎯 The Pattern</p>
-                <RichReportText text={summary.corePattern || summary.coreProblem} className="text-red-900" boldColorClass="text-red-950 font-800" />
+                <RichReportText text={summary.corePattern || summary.coreProblem} className="text-red-900" boldColorClass="text-red-950 font-800" linkWords={log.map((e) => e.word)} onWordClick={jumpToWordRow} />
               </div>
 
               {/* 2. How Reliable Is This */}
               <div className="p-6 rounded-3xl" style={{ background: "#fef3c7", border: "4px solid #d97706" }}>
                 <p className="font-display font-800 text-xs uppercase tracking-wide text-amber-800 mb-2">🧠 How Reliable Is This</p>
-                <RichReportText text={summary.howReliable} className="text-amber-900" boldColorClass="text-amber-950 font-800" />
+                <RichReportText text={summary.howReliable} className="text-amber-900" boldColorClass="text-amber-950 font-800" linkWords={log.map((e) => e.word)} onWordClick={jumpToWordRow} />
               </div>
 
               {/* 3. What To Try */}
               <div className="p-6 rounded-3xl" style={{ background: "linear-gradient(135deg,#fef3c7,#fde68a)", border: "4px solid #d97706" }}>
                 <p className="font-display font-800 text-xs uppercase tracking-wide text-amber-800 mb-2">💡 What To Try in Class</p>
-                <RichReportText text={summary.whatToTry} className="text-amber-900" boldColorClass="text-amber-950 font-800" />
+                <RichReportText text={summary.whatToTry} className="text-amber-900" boldColorClass="text-amber-950 font-800" linkWords={log.map((e) => e.word)} onWordClick={jumpToWordRow} />
               </div>
             </div>
           )}
@@ -5219,7 +5321,13 @@ function TeacherScreen({ studentId, log, onBack, onReset, sessionStartedAt, comp
                   <tr><td colSpan={showMapColumn ? 5 : 4} className="px-4 py-8 text-center font-hand text-lg text-stone-500">No words logged yet. Have the student solve a few words first!</td></tr>
                 )}
                 {log.map((entry, i) => (
-                  <tr key={i} className={`border-b border-blue-100 last:border-0 ${entry.skipped ? "bg-rose-50" : ""}`}>
+                  <tr
+                    key={i}
+                    id={`word-log-row-${i}`}
+                    className={`border-b border-blue-100 last:border-0 transition-colors ${
+                      highlightedWord === entry.word.toLowerCase() ? "bg-amber-100" : entry.skipped ? "bg-rose-50" : ""
+                    }`}
+                  >
                     <td className="px-4 py-3 font-display font-700 text-stone-700">
                       {entry.word}
                       {entry.skipped && <span className="ml-2 font-body font-700 text-[10px] uppercase text-rose-700 bg-rose-100 px-2 py-0.5 rounded-full">Skipped</span>}
@@ -5426,6 +5534,7 @@ function BuildYourOwnScreen({ onBack }) {
 function FileBoxScreen({ onBack }) {
   const [view, setView] = useState("roster"); // "roster" | "sessions" | "detail"
   const [roster, setRoster] = useState(null);
+  const [classStats, setClassStats] = useState(null);
   const [rosterLoading, setRosterLoading] = useState(true);
   const [rosterError, setRosterError] = useState(null);
   const [selectedStudent, setSelectedStudent] = useState(null);
@@ -5446,7 +5555,7 @@ function FileBoxScreen({ onBack }) {
     setRosterLoading(true);
     setRosterError(null);
     fetchTeacherRoster()
-      .then((students) => { if (!cancelled) setRoster(students); })
+      .then((data) => { if (!cancelled) { setRoster(data.students); setClassStats(data.classStats || null); } })
       .catch((e) => { if (!cancelled) setRosterError(e.message || "Couldn't load the roster"); })
       .finally(() => { if (!cancelled) setRosterLoading(false); });
     return () => { cancelled = true; };
@@ -5493,6 +5602,7 @@ function FileBoxScreen({ onBack }) {
       return (
         <TeacherScreen
           studentId={sessionDetail.session.studentName}
+          realStudentId={sessionDetail.session.studentId}
           log={sessionDetail.log}
           comprehensionResult={sessionDetail.session.comprehensionResult}
           sessionStartedAt={new Date(sessionDetail.session.startedAt).getTime()}
@@ -5613,6 +5723,23 @@ function FileBoxScreen({ onBack }) {
       {roster && roster.length === 0 && (
         <p className="font-body text-sm text-stone-500 relative z-10">No students yet. They'll show up here once someone signs up as a new student.</p>
       )}
+
+      {classStats && classStats.total >= 3 && (() => {
+        const rate = Math.round((classStats.independent / classStats.total) * 100);
+        const weakest = weakestClueType(classStats.breakdown);
+        return (
+          <div className="mb-4 p-5 rounded-3xl relative z-10 step-in" style={{ background: "#dbeafe", border: "3px solid #2563eb" }}>
+            <p className="font-display font-800 text-xs uppercase tracking-wide text-blue-800 mb-2">📊 Whole Class, At a Glance</p>
+            <p className="font-body text-sm text-blue-900 leading-relaxed">
+              Across <b>{classStats.studentCount}</b> student{classStats.studentCount === 1 ? "" : "s"} and <b>{classStats.total}</b> word{classStats.total === 1 ? "" : "s"} attempted, <b>{rate}%</b> were solved independently.
+              {weakest && (
+                <> <b className="capitalize">{weakest.type}</b>-clue words have been the toughest so far — {weakest.independent}/{weakest.total} independent, worth a quick class review.</>
+              )}
+            </p>
+            <p className="font-body text-[11px] text-blue-600 mt-2">🔢 Counted directly from every logged word, not AI</p>
+          </div>
+        );
+      })()}
       {resetSuccessName && (
         <div
           className="flex items-center justify-between gap-2 mb-3 px-4 py-2.5 rounded-2xl bg-emerald-50 relative z-10"
@@ -6067,7 +6194,7 @@ export default function App() {
           />
         )}
         {screen === "teacher" && (
-          <TeacherScreen studentId={studentId} log={log} onBack={() => setScreen("passage")} onReset={handleReset} sessionStartedAt={sessionStartedAt} comprehensionResult={comprehensionResult} />
+          <TeacherScreen studentId={studentId} realStudentId={studentAuth?.student?.id} log={log} onBack={() => setScreen("passage")} onReset={handleReset} sessionStartedAt={sessionStartedAt} comprehensionResult={comprehensionResult} />
         )}
       </main>
     </div>

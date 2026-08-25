@@ -143,6 +143,25 @@ app.delete("/api/session", (req, res) => {
   return res.status(200).json({ ok: true });
 });
 
+// Mirrors computeStatsBreakdown in api/_teacherRosterHandler.js (camelCase
+// log-entry shape here instead of that file's snake_case DB columns) so
+// the offline/rehearsal demo shows the same class-rollup and cross-session
+// callouts as the real deployed app, not a silently stripped-down version.
+const CLUE_TYPES = ["contrast", "definition", "example", "inference"];
+function computeStatsBreakdown(words) {
+  const solved = words.filter((w) => !w.skipped);
+  const independent = solved.filter((w) => w.hintsUsed === 0).length;
+  const withHelp = solved.filter((w) => w.hintsUsed > 0).length;
+  const skipped = words.filter((w) => w.skipped).length;
+  const breakdown = CLUE_TYPES
+    .map((type) => {
+      const inType = words.filter((w) => w.clueType === type && !w.skipped);
+      return { type, total: inType.length, independent: inType.filter((w) => w.hintsUsed === 0).length };
+    })
+    .filter((b) => b.total > 0);
+  return { total: words.length, independent, withHelp, skipped, breakdown };
+}
+
 app.get("/api/teacher-roster", (req, res) => {
   const authHeader = req.headers["authorization"] || "";
   const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
@@ -154,18 +173,27 @@ app.get("/api/teacher-roster", (req, res) => {
     const student = students.find((s) => s.id === studentId && s.label === claims.label);
     if (!student) return res.status(404).json({ error: "Student not found" });
     const studentSessions = sessions.filter((s) => s.studentId === studentId);
+    const studentStats = { ...computeStatsBreakdown(studentSessions.flatMap((s) => s.log || [])), sessionCount: studentSessions.length };
     return res.status(200).json({
       student: { id: student.id, fullName: student.fullName },
       sessions: studentSessions.map((s) => ({ id: s.id, passageTitle: s.passageTitle, passageEmoji: s.passageEmoji, startedAt: s.startedAt, finishedAt: s.finishedAt, wordCount: (s.log || []).length, comprehensionCorrect: s.comprehensionResult?.correct ?? null })),
+      studentStats,
     });
   }
 
+  let contributingStudents = 0;
+  const allWords = [];
   const roster = students.filter((s) => s.label === claims.label).map((s) => {
     const studentSessions = sessions.filter((sess) => sess.studentId === s.id);
+    if (studentSessions.length > 0) {
+      contributingStudents += 1;
+      for (const sess of studentSessions) allWords.push(...(sess.log || []));
+    }
     const lastSessionAt = studentSessions.reduce((latest, sess) => (!latest || sess.finishedAt > latest ? sess.finishedAt : latest), null);
     return { id: s.id, fullName: s.fullName, createdAt: s.createdAt, lastLoginAt: s.lastLoginAt, sessionCount: studentSessions.length, lastSessionAt };
   });
-  return res.status(200).json({ students: roster });
+  const classStats = { ...computeStatsBreakdown(allWords), studentCount: contributingStudents };
+  return res.status(200).json({ students: roster, classStats });
 });
 
 app.delete("/api/teacher-roster", (req, res) => {
