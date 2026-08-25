@@ -113,15 +113,6 @@ const RESOLVED_TEMPLATES = [
   function (word, meaning) { return "That's it! \"" + word + "\" means " + meaning + " — great context-clue reading."; },
   function (word, meaning) { return "You nailed it! \"" + word + "\" means " + meaning + " here."; },
 ];
-const GENERIC_FIRST_TEMPLATES = [
-  function (word) { return "Let's work out what \"" + word + "\" means. Read this part carefully, then explain what you think it means in your own words."; },
-  function (word) { return "Here's a new one: \"" + word + "\". Read the part below, then tell me what you think it means."; },
-];
-const GENERIC_RESOLVED_TEMPLATES = [
-  function (word) { return "Nice thinking! That's a fair way to describe \"" + word + "\" based on how it's used here."; },
-  function (word) { return "Good explanation! That fits how \"" + word + "\" is used in this part of the story."; },
-];
-
 function pickOne(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 
 function findLiteralWord(text) {
@@ -325,21 +316,28 @@ function mockClaude(promptId, messages) {
     const wasCorrect = /\[FACT: this answer is CORRECT\./.test(lastMsg);
 
     // A word with no curated dictionary entry at all (outside both the core
-    // 20 and the extended 30) -- fall back to a "text" exchange grounded in
-    // the real sentence pulled from the passage.
+    // 20 and the extended 30) -- fall back to an MCQ built from a
+    // DIFFERENT known word's meaning/distractor shape (self-consistent
+    // MCQ, not a real definition for this word), same trade-off already
+    // made for the transfer_test fallback below. Deliberately never
+    // "text" here: Stage 1 always needs a real correct_answer for the
+    // frontend to check the tap against, not a free-typed exchange graded
+    // by nothing (the real coach never uses "text" at Stage 1 either --
+    // see STAGE1_CYCLE and buildCoachSystemPrompt's CORRECTNESS rules).
     if (!w) {
       const passageText = extractPassageText(allMsgs);
       let sentence = getSentenceContaining(passageText, word);
       sentence = sentence ? sentence.trim() : "";
       if (!sentence) sentence = "The passage uses \"" + word + "\" somewhere in the story.";
-      const missingWordFact = /\[FACT: the answer does not contain the target word/.test(lastMsg);
+      const borrowed = WORDS[KNOWN_WORDS[Math.floor(Math.random() * KNOWN_WORDS.length)]];
+      const options = [borrowed.meaning].concat(pickDistinct(borrowed.distractors, 3, null)).sort(function () { return Math.random() - 0.5; });
       if (isFirstTurn) {
-        return { message: pickOne(GENERIC_FIRST_TEMPLATES)(word), display_sentence: sentence, input_type: "text", options: null, word_tiles: null, correct_answer: null, sentence_starter: null, stage: 1, grading_reasoning: null, hint_given: false, resolved: false, fun_fact: null };
+        return { message: pickOne(INTRO_TEMPLATES)(word), display_sentence: sentence, input_type: "mcq", options: options, word_tiles: null, correct_answer: borrowed.meaning, sentence_starter: null, stage: 1, grading_reasoning: null, hint_given: false, resolved: false, fun_fact: null };
       }
-      if (missingWordFact) {
-        return { message: "Good try! Can you use the actual word \"" + word + "\" somewhere in your explanation this time?", display_sentence: sentence, input_type: "text", options: null, word_tiles: null, correct_answer: null, sentence_starter: null, stage: 1, grading_reasoning: null, hint_given: true, resolved: false, fun_fact: null };
+      if (wasCorrect) {
+        return { message: pickOne(RESOLVED_TEMPLATES)(word, borrowed.meaning.toLowerCase()), display_sentence: sentence, input_type: "mcq", options: options, word_tiles: null, correct_answer: borrowed.meaning, sentence_starter: null, stage: 1, grading_reasoning: null, hint_given: false, resolved: true, fun_fact: "Great context-clue reading!" };
       }
-      return { message: pickOne(GENERIC_RESOLVED_TEMPLATES)(word), display_sentence: sentence, input_type: "text", options: null, word_tiles: null, correct_answer: null, sentence_starter: null, stage: 2, grading_reasoning: null, hint_given: false, resolved: true, fun_fact: null };
+      return { message: pickOne(WRONG_WRAPPERS)("Look at this part again: \"" + sentence + "\" — which meaning fits best there?"), display_sentence: sentence, input_type: "mcq", options: options, word_tiles: null, correct_answer: borrowed.meaning, sentence_starter: null, stage: 1, grading_reasoning: null, hint_given: true, resolved: false, fun_fact: null };
     }
 
     const hintText = w.hint || buildContextualHint(word, allMsgs);

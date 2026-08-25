@@ -1241,6 +1241,11 @@ function validateCoachResponse(parsed, targetWordText) {
   if (typeof parsed.display_sentence !== "string" || !parsed.display_sentence.trim()) return false;
   if (!COACH_INPUT_TYPES.has(parsed.input_type)) return false;
   if (typeof parsed.stage !== "number" || parsed.stage < 1 || parsed.stage > 5) return false;
+  // "text" is only ever a legal choice at Stage 4/5 (open-ended, no fixed
+  // answer) — Stage 1/2/3 all have a real correct_answer/target word to
+  // pick, tap, or spell, so free typing there is a prompt violation, not
+  // a valid variant. Force a retry rather than show it.
+  if (parsed.input_type === "text" && parsed.stage !== 4 && parsed.stage !== 5) return false;
   if (COACH_TYPES_NEEDING_OPTIONS.has(parsed.input_type)) {
     if (!Array.isArray(parsed.options) || parsed.options.length < 2) return false;
     if (parsed.input_type === "true_false" && parsed.options.length !== 2) return false;
