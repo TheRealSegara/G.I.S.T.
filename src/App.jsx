@@ -1078,6 +1078,24 @@ const COACH_INPUT_TYPES = new Set(["mcq", "true_false", "tap_select", "word_bank
 const COACH_TYPES_NEEDING_OPTIONS = new Set(["mcq", "true_false", "tap_select", "reverse_clue"]);
 const COACH_TYPES_NEEDING_TILES = new Set(["word_bank", "letter_connect"]);
 
+// Deterministic backstop for the prompt's own LANGUAGE RULES (see
+// buildCoachSystemPrompt) -- a model that ignores the wording and writes
+// a wall of text, a run-on sentence, a "nevertheless," or a long MCQ
+// phrase gets rejected and retried here instead of silently shipping
+// content the target 9-12-year-old ESL reader can't parse.
+const HARD_CONNECTOR_RE = /\b(although|nevertheless|consequently)\b/i;
+const MESSAGE_MAX_SENTENCES = 3;
+const MESSAGE_MAX_WORDS_PER_SENTENCE = 12;
+const MCQ_OPTION_MAX_WORDS = 5;
+
+function wordCount(s) {
+  return String(s).trim().split(/\s+/).filter(Boolean).length;
+}
+
+function messageSentences(message) {
+  return String(message).split(/[.!?]+/).map((s) => s.trim()).filter(Boolean);
+}
+
 // Loose inflection strip (plural/tense endings) so "resilient" also catches
 // a lazily-inflected "resiliently"-style variant used as a distractor.
 function stripInflection(s) {
@@ -1157,6 +1175,16 @@ function validateCoachResponse(parsed, targetWordText) {
   // true_false must pose a statement to judge, not a question — a question
   // with True/False buttons under it gives the student nothing to judge.
   if (parsed.input_type === "true_false" && /\?\s*$/.test(parsed.message.trim())) return false;
+  // LANGUAGE RULES backstop: no hard connectors, message capped at 3 short
+  // sentences (each capped at 12 words), MCQ options capped at 5 words —
+  // see HARD_CONNECTOR_RE etc. above.
+  if (HARD_CONNECTOR_RE.test(parsed.message)) return false;
+  const msgSentences = messageSentences(parsed.message);
+  if (msgSentences.length > MESSAGE_MAX_SENTENCES) return false;
+  if (msgSentences.some((s) => wordCount(s) > MESSAGE_MAX_WORDS_PER_SENTENCE)) return false;
+  if (parsed.input_type === "mcq" && Array.isArray(parsed.options)) {
+    if (parsed.options.some((opt) => wordCount(opt) > MCQ_OPTION_MAX_WORDS)) return false;
+  }
   if (!targetWordText) return true; // no target word available to check content against
 
   // Content checks: the shape can be perfectly valid JSON while still being

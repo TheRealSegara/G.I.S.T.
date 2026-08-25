@@ -58,6 +58,16 @@ function optionInSentence(option, sentence) {
   const sentenceWords = stripPunctForCompare(sentence).split(/\s+/);
   return sentenceWords.includes(cleanOption);
 }
+function wordCount(s) {
+  return String(s).trim().split(/\s+/).filter(Boolean).length;
+}
+function messageSentences(message) {
+  return String(message).split(/[.!?]+/).map((s) => s.trim()).filter(Boolean);
+}
+const HARD_CONNECTOR_RE = /\b(although|nevertheless|consequently)\b/i;
+const MESSAGE_MAX_SENTENCES = 3;
+const MESSAGE_MAX_WORDS_PER_SENTENCE = 12;
+const MCQ_OPTION_MAX_WORDS = 5;
 
 // Returns a list of violation strings (empty = clean).
 function checkInvariants(parsed, targetWord) {
@@ -66,6 +76,9 @@ function checkInvariants(parsed, targetWord) {
     if (parsed.options.some((opt) => isTargetWordMatch(opt, targetWord))) {
       violations.push(`mcq options include the target word itself: ${JSON.stringify(parsed.options)}`);
     }
+    if (parsed.options.some((opt) => wordCount(opt) > MCQ_OPTION_MAX_WORDS)) {
+      violations.push(`mcq option over ${MCQ_OPTION_MAX_WORDS} words: ${JSON.stringify(parsed.options)}`);
+    }
   }
   if ((parsed.input_type === "word_bank" || parsed.input_type === "letter_connect") && !tilesMatchWord(parsed.word_tiles, targetWord)) {
     violations.push(`word_tiles don't match "${targetWord}": ${JSON.stringify(parsed.word_tiles)}`);
@@ -73,6 +86,28 @@ function checkInvariants(parsed, targetWord) {
   if ((parsed.input_type === "tap_select" || parsed.input_type === "reverse_clue") && Array.isArray(parsed.options)) {
     const bad = parsed.options.filter((opt) => !optionInSentence(opt, parsed.display_sentence));
     if (bad.length) violations.push(`option(s) not actually in display_sentence: ${JSON.stringify(bad)} (sentence: "${parsed.display_sentence}")`);
+    if (parsed.options.length < 3 || parsed.options.length > 6) {
+      violations.push(`${parsed.input_type} has ${parsed.options.length} options, expected 3-6: ${JSON.stringify(parsed.options)}`);
+    }
+  }
+  if (parsed.input_type === "true_false") {
+    if (!Array.isArray(parsed.options) || parsed.options.length !== 2) {
+      violations.push(`true_false options should be exactly ["True","False"]: ${JSON.stringify(parsed.options)}`);
+    }
+    if (/\?\s*$/.test(String(parsed.message).trim())) {
+      violations.push(`true_false message is phrased as a question, not a statement: "${parsed.message}"`);
+    }
+  }
+  if (HARD_CONNECTOR_RE.test(parsed.message)) {
+    violations.push(`message uses a banned hard connector: "${parsed.message}"`);
+  }
+  const sentences = messageSentences(parsed.message);
+  if (sentences.length > MESSAGE_MAX_SENTENCES) {
+    violations.push(`message has ${sentences.length} sentences, max ${MESSAGE_MAX_SENTENCES}: "${parsed.message}"`);
+  }
+  const longSentence = sentences.find((s) => wordCount(s) > MESSAGE_MAX_WORDS_PER_SENTENCE);
+  if (longSentence) {
+    violations.push(`message sentence over ${MESSAGE_MAX_WORDS_PER_SENTENCE} words: "${longSentence}"`);
   }
   return violations;
 }
@@ -93,68 +128,68 @@ async function callGroq(system, messages) {
   return JSON.parse(text);
 }
 
-// --- Scenarios: mirrors a real playthrough — Stage 1 mcq, Stage 2
-// word_bank, Stage 3 tap_select — submitting the correct answer each turn
-// (with the same [FACT: ...] note the real app injects) to advance. ---
+// --- Scenarios: mirrors a real playthrough through Stages 1-3, submitting
+// the correct answer each turn (with the same [FACT: ...] note the real
+// app injects) to advance. Runs each scenario against two different
+// input_type combos so both cycle branches actually get exercised —
+// mcq/word_bank/tap_select alone would never have caught the true_false
+// question-phrasing or reverse_clue Stage-3-framing bugs found in the
+// coach quality audit, since neither type appears in that combo. ---
 
 const SCENARIOS = [
   { word: "resilient", passage: "After the storm, the old village was resilient and quickly rebuilt its homes." },
   { word: "camouflage", passage: "The gecko used its camouflage to blend perfectly into the green leaves." },
 ];
 
-async function runScenario(scenario, runIndex) {
+const TYPE_COMBOS = [
+  { stage1: "mcq", stage2: "word_bank", stage3: "tap_select" },
+  { stage1: "true_false", stage2: "letter_connect", stage3: "reverse_clue" },
+];
+
+async function runScenario(scenario, typeCombo, runIndex) {
   const violations = [];
-  const system = buildCoachSystemPrompt("parrot", "mcq", "word_bank", "tap_select");
+  const system = buildCoachSystemPrompt("parrot", typeCombo.stage1, typeCombo.stage2, typeCombo.stage3);
   const openingMsg = `Passage: "${scenario.passage}"\n\nStart coaching for the target word "${scenario.word}". Begin at Stage 1.`;
   const history = [{ role: "user", content: openingMsg }];
+  const label = `${scenario.word} [${typeCombo.stage1}/${typeCombo.stage2}/${typeCombo.stage3}] run ${runIndex}`;
 
-  let parsed;
-  try {
-    parsed = await callGroq(system, history);
-  } catch (e) {
-    return [`[${scenario.word} run ${runIndex}] Stage 1 call failed: ${e.message}`];
+  for (let stage = 1; stage <= 3; stage++) {
+    let parsed;
+    try {
+      parsed = await callGroq(system, history);
+    } catch (e) {
+      violations.push(`[${label}] Stage ${stage} call failed: ${e.message}`);
+      return violations;
+    }
+    violations.push(...checkInvariants(parsed, scenario.word).map((v) => `[${label}, stage ${stage}] ${v}`));
+    if (stage === 3) break;
+    history.push({ role: "assistant", content: JSON.stringify(parsed) });
+    // Deterministic types (mcq/true_false/tap_select/reverse_clue) have a
+    // fixed correct_answer; word_bank/letter_connect check against the
+    // target word itself instead — same distinction submitAnswer() makes
+    // in the real app via getCorrectAnswerForCurrent().
+    const answer = typeof parsed.correct_answer === "string" ? parsed.correct_answer : scenario.word;
+    history.push({ role: "user", content: `${answer}\n[FACT: this answer is CORRECT. Trust this, don't re-judge correctness yourself this turn.]` });
   }
-  violations.push(...checkInvariants(parsed, scenario.word).map((v) => `[${scenario.word} run ${runIndex}, stage 1] ${v}`));
-  history.push({ role: "assistant", content: JSON.stringify(parsed) });
-
-  // Submit the correct MCQ answer, exactly like submitAnswer() does.
-  const mcqAnswer = parsed.correct_answer || (parsed.options && parsed.options[0]) || "";
-  history.push({ role: "user", content: `${mcqAnswer}\n[FACT: this answer is CORRECT. Trust this, don't re-judge correctness yourself this turn.]` });
-  try {
-    parsed = await callGroq(system, history);
-  } catch (e) {
-    violations.push(`[${scenario.word} run ${runIndex}] Stage 2 call failed: ${e.message}`);
-    return violations;
-  }
-  violations.push(...checkInvariants(parsed, scenario.word).map((v) => `[${scenario.word} run ${runIndex}, stage 2] ${v}`));
-  history.push({ role: "assistant", content: JSON.stringify(parsed) });
-
-  // Submit the target word itself as the word_bank/letter_connect answer.
-  history.push({ role: "user", content: `${scenario.word}\n[FACT: this answer is CORRECT. Trust this, don't re-judge correctness yourself this turn.]` });
-  try {
-    parsed = await callGroq(system, history);
-  } catch (e) {
-    violations.push(`[${scenario.word} run ${runIndex}] Stage 3 call failed: ${e.message}`);
-    return violations;
-  }
-  violations.push(...checkInvariants(parsed, scenario.word).map((v) => `[${scenario.word} run ${runIndex}, stage 3] ${v}`));
-
   return violations;
 }
 
 (async () => {
-  console.log(`Running ${SCENARIOS.length} scenario(s) x ${RUNS_PER_SCENARIO} run(s) against ${GROQ_MODEL}...\n`);
+  console.log(`Running ${SCENARIOS.length} scenario(s) x ${TYPE_COMBOS.length} type combo(s) x ${RUNS_PER_SCENARIO} run(s) against ${GROQ_MODEL}...\n`);
   let totalViolations = [];
   for (const scenario of SCENARIOS) {
-    for (let i = 1; i <= RUNS_PER_SCENARIO; i++) {
-      const violations = await runScenario(scenario, i);
-      if (violations.length) {
-        console.log(`✗ ${scenario.word} run ${i}: ${violations.length} violation(s)`);
-        violations.forEach((v) => console.log(`   - ${v}`));
-      } else {
-        console.log(`✓ ${scenario.word} run ${i}: clean`);
+    for (const typeCombo of TYPE_COMBOS) {
+      for (let i = 1; i <= RUNS_PER_SCENARIO; i++) {
+        const label = `${scenario.word} [${typeCombo.stage1}/${typeCombo.stage2}/${typeCombo.stage3}] run ${i}`;
+        const violations = await runScenario(scenario, typeCombo, i);
+        if (violations.length) {
+          console.log(`✗ ${label}: ${violations.length} violation(s)`);
+          violations.forEach((v) => console.log(`   - ${v}`));
+        } else {
+          console.log(`✓ ${label}: clean`);
+        }
+        totalViolations = totalViolations.concat(violations);
       }
-      totalViolations = totalViolations.concat(violations);
     }
   }
   console.log(`\n${totalViolations.length === 0 ? "All clean." : `${totalViolations.length} total violation(s) found.`}`);
