@@ -6296,7 +6296,7 @@ function DiagnosticReportSkeleton() {
   );
 }
 
-function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log, onBack, onReset, sessionStartedAt, comprehensionResult, isDemo = false, initialSummary = null, onDiagnosticGenerated = null, hideResetSection = false, classPattern = null, selfComputeClassPattern = false, onCreateTargetedPassage = null, initialStudentStats = null, initialPastSessions = null, initialWordHistory = null, initialCalibration = null }) {
+function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log, onBack, onReset, sessionStartedAt, comprehensionResult, isDemo = false, initialSummary = null, onDiagnosticGenerated = null, hideResetSection = false, classPattern = null, selfComputeClassPattern = false, onCreateTargetedPassage = null, initialStudentStats = null, initialPastSessions = null, initialWordHistory = null, initialCalibration = null, onOpenFileBox = null }) {
   const demoModeActive = useDemoMode();
 
   // Only the live "just finished" report (selfComputeClassPattern) needs
@@ -6654,6 +6654,17 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
           <button onClick={() => setShowHelp((s) => !s)} className="font-display font-700 text-xs text-stone-500 bg-white rounded-full px-3 py-1.5 border-[3px] border-stone-300">
             ℹ️ How this works
           </button>
+          {/* One-way jump only -- File Box has no notion of "the report I
+              came from," and threading that context back through both
+              screens isn't worth it when reopening the same student from
+              File Box's own roster is already one click away. Hidden on
+              nested views (hideResetSection) so History and File Box's own
+              session detail don't offer a jump back into File Box. */}
+          {onOpenFileBox && !hideResetSection && (
+            <button onClick={() => { SFX.tap(); onOpenFileBox(); }} className="font-display font-700 text-xs text-violet-700 hover:text-violet-900 bg-white rounded-full px-3 py-1.5 border-[3px] border-stone-300">
+              🗃️ File Box
+            </button>
+          )}
           <span className="flex items-center gap-1 font-display font-700 text-xs text-stone-500">
             <GraduationCap className="w-3.5 h-3.5" /> Teacher view
           </span>
@@ -8563,6 +8574,7 @@ export default function App() {
             initialWordHistory={SAMPLE_WORD_HISTORY}
             initialCalibration={SAMPLE_CALIBRATION}
             onCreateTargetedPassage={handleCreateTargetedPassage}
+            onOpenFileBox={() => setScreen("file-box")}
           />
         )}
         {screen === "file-box" && <FileBoxScreen onBack={() => setScreen("setup")} onCreateTargetedPassage={handleCreateTargetedPassage} />}
@@ -8667,6 +8679,7 @@ export default function App() {
             comprehensionResult={comprehensionResult}
             selfComputeClassPattern
             onCreateTargetedPassage={handleCreateTargetedPassage}
+            onOpenFileBox={() => setScreen("file-box")}
           />
         )}
       </main>
