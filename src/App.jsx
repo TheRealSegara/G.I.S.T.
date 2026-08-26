@@ -6576,7 +6576,14 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
           onReset={() => setViewingSessionId(null)}
           hideResetSection
           isDemo={isDemo}
-          classPattern={classPattern}
+          // effectiveClassPattern, not the raw classPattern prop -- on the
+          // live "just finished" report (selfComputeClassPattern, no
+          // classPattern prop passed at all), the real Class Pattern only
+          // ever lives in the self-computed effectiveClassPattern. Passing
+          // the bare prop here silently dropped it the moment a teacher
+          // opened a different past session from History, even though it's
+          // still the same student's same overall pattern either way.
+          classPattern={effectiveClassPattern}
           onCreateTargetedPassage={onCreateTargetedPassage}
         />
       );
