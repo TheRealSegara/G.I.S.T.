@@ -1562,8 +1562,17 @@ function SecretAnimalPicker({ value, onChange }) {
 }
 
 /* ---------------- Setup Screen ---------------- */
-function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, bilingual, onToggleBilingual, onStudentAuthenticated, onOpenFileBox, onOpenTeacherTools }) {
-  const [mode, setMode] = useState(null); // null (main menu) | "tour" | "play" | "maker"
+function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, bilingual, onToggleBilingual, onStudentAuthenticated, onOpenFileBox, onOpenTeacherTools, initialMakerFocus = null, onMakerFocusConsumed }) {
+  const [mode, setMode] = useState(initialMakerFocus ? "maker" : null); // null (main menu) | "tour" | "play" | "maker"
+  // Captured once at mount (not read live off the prop): App clears
+  // initialMakerFocus right after this mount via onMakerFocusConsumed, but
+  // this component still needs the value for the rest of its own lifetime
+  // (the banner below, and the AI request in generateMakerLevel).
+  const [makerFocus] = useState(initialMakerFocus);
+  useEffect(() => {
+    if (initialMakerFocus) onMakerFocusConsumed?.();
+    // eslint-disable-next-line
+  }, []);
   const [step, setStep] = useState(1);
   const [studentId, setStudentId] = useState("");
   const [avatarConfig, setAvatarConfig] = useState(DEFAULT_AVATAR_CONFIG);
@@ -1615,9 +1624,16 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, bilingual, 
     setMakerError(null);
     setMakerResult(null);
     const chosenWords = makerWords.map((w) => w.trim()).filter(Boolean);
-    const userContent = chosenWords.length
+    let userContent = chosenWords.length
       ? `${makerText.trim()}\n\nRequired words: use exactly these words for the target list, in this order, spelled exactly as I've written them here: ${chosenWords.join(", ")}. If fewer than ${SESSION_WORD_COUNT} are given, pick your own good words to fill the remaining slots.`
       : makerText.trim();
+    // Hand-off from a report's "Suggested Next Step" card: nudge word
+    // selection toward the clue type a specific student struggles with,
+    // without pretending to already know which words the pasted passage
+    // actually contains (that's still the AI's job, same as always).
+    if (makerFocus) {
+      userContent += `\n\nFocus specifically on words that work well with ${makerFocus}-type context clues, since this passage is meant to build that specific skill.`;
+    }
     try {
       const parsed = await callClaudeWithRetry(
         "level_maker",
@@ -1893,6 +1909,15 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, bilingual, 
             <p className="text-4xl text-center mb-4">🛠️</p>
             <h1 className="font-display font-800 text-xl text-stone-700 block mb-2 text-center">Create your own map</h1>
             <p className="font-body text-xs text-stone-500 text-center mb-5">Paste a passage (about 80-150 words). The AI will pick {SESSION_WORD_COUNT} good target words with real context clues.</p>
+
+            {makerFocus && (
+              <div className="flex items-center gap-2 mb-5 px-4 py-3 rounded-2xl" style={{ background: "#ede9fe", border: "2px solid #7c3aed" }}>
+                <span className="text-xl">🎯</span>
+                <p className="font-body text-sm text-violet-900">
+                  <strong className="capitalize">{makerFocus}-clue focus</strong> — from a report suggesting extra practice with {makerFocus}-type clues. Paste any passage below, the AI will lean toward that.
+                </p>
+              </div>
+            )}
 
             <label htmlFor="maker-title" className="font-display font-700 text-xs uppercase tracking-wide text-teal-700 block mb-2">Map title</label>
             <input
@@ -5143,6 +5168,44 @@ function weakestClueType(breakdown, minTotal = 2) {
   return eligible.reduce((worst, b) => (b.independent / b.total < worst.independent / worst.total ? b : worst));
 }
 
+// Shared by FileBoxScreen (which already has a loaded roster) and
+// TeacherScreen's own self-fetch on the live "just finished" report
+// (which has no roster loaded yet) -- one source of truth for "does this
+// student share their weakest-clue-type gap with any OTHER student."
+function computeClassPatternForStudent(roster, classes, student) {
+  if (!student?.weakestClueType || !roster) return null;
+  const classmates = roster.filter((s) => s.id !== student.id && s.weakestClueType?.type === student.weakestClueType.type);
+  if (classmates.length === 0) return null;
+  const classSize = student.classId ? roster.filter((s) => s.classId === student.classId).length : roster.length;
+  const className = student.classId ? classes.find((c) => c.id === student.classId)?.name : null;
+  return {
+    type: student.weakestClueType.type,
+    matchingCount: classmates.length + 1,
+    classSize,
+    className: className || "this roster",
+    matchingNames: [student, ...classmates].map((s) => s.fullName),
+  };
+}
+
+// Demo Mode (the presenter toggle) never saves a real session, so there's
+// no real classmate data to fetch -- synthesize a plausible Class Pattern
+// from THIS session's own weakest clue type instead, same synthesis
+// philosophy as SKIP_REPORT_PROFILES below, so a live pitch can still show
+// off the flagship comparison card without needing real students.
+const DEMO_CLASSMATE_NAMES = ["Aisha", "Marcus", "Priya", "Wei Ling", "Farid"];
+function synthesizeDemoClassPattern(glance, studentId) {
+  const weakest = weakestClueType(glance.breakdown, 1);
+  if (!weakest) return null;
+  const matchingCount = 3;
+  return {
+    type: weakest.type,
+    matchingCount,
+    classSize: 12,
+    className: "this class",
+    matchingNames: [studentId, ...DEMO_CLASSMATE_NAMES.slice(0, matchingCount - 1)],
+  };
+}
+
 function computeAtAGlance(log) {
   const solved = log.filter((e) => !e.skipped);
   const independent = solved.filter((e) => e.hintsUsed === 0).length;
@@ -5301,6 +5364,19 @@ const SAMPLE_COMPREHENSION = {
   question: "Why was Ali's dog considered clever?",
   studentAnswer: "It could open doors by itself",
   correctAnswer: "It could open doors by itself",
+};
+
+// Made-up, same as the rest of the sample report -- "definition" matches
+// what TeacherScreen's own nextStepWeakest independently derives from
+// SAMPLE_LOG above (camouflage needed a hint, the only definition-clue
+// word), so the Class Pattern and Suggested Next Step cards agree on the
+// same headline gap instead of naming two different clue types.
+const SAMPLE_CLASS_PATTERN = {
+  type: "definition",
+  matchingCount: 5,
+  classSize: 28,
+  className: "4A",
+  matchingNames: ["Sample Student", "Aisha", "Marcus", "Ravi", "Siti"],
 };
 
 function TourScreen({ avatarConfig, passage, onDone, bilingual, onToggleBilingual, standalone = false }) {
@@ -5685,8 +5761,34 @@ function DiagnosticReportSkeleton() {
   );
 }
 
-function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log, onBack, onReset, sessionStartedAt, comprehensionResult, isDemo = false, initialSummary = null, onDiagnosticGenerated = null, hideResetSection = false, classPattern = null }) {
+function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log, onBack, onReset, sessionStartedAt, comprehensionResult, isDemo = false, initialSummary = null, onDiagnosticGenerated = null, hideResetSection = false, classPattern = null, selfComputeClassPattern = false, onCreateTargetedPassage = null }) {
   const demoModeActive = useDemoMode();
+
+  // Only the live "just finished" report (selfComputeClassPattern) needs
+  // to go find this itself -- FileBoxScreen and this component's own
+  // History-section re-render already have a loaded roster and pass a
+  // real (possibly null) classPattern prop directly, so self-fetching
+  // there too would just be a redundant extra request for the same answer.
+  const [selfClassPattern, setSelfClassPattern] = useState(null);
+  useEffect(() => {
+    if (!selfComputeClassPattern) return;
+    if (demoModeActive) {
+      setSelfClassPattern(synthesizeDemoClassPattern(computeAtAGlance(log), studentId));
+      return;
+    }
+    if (!realStudentId) return;
+    let cancelled = false;
+    fetchTeacherRoster(null)
+      .then((data) => {
+        if (cancelled) return;
+        const student = (data.students || []).find((s) => s.id === realStudentId);
+        setSelfClassPattern(student ? computeClassPatternForStudent(data.students, data.classes || [], student) : null);
+      })
+      .catch(() => { /* silent: this is a bonus callout, not core report functionality */ });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line
+  }, [selfComputeClassPattern, demoModeActive, realStudentId]);
+  const effectiveClassPattern = classPattern || selfClassPattern;
   const [summary, setSummary] = useState(initialSummary);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -5894,6 +5996,7 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
           onReset={() => setViewingSessionId(null)}
           hideResetSection
           classPattern={classPattern}
+          onCreateTargetedPassage={onCreateTargetedPassage}
         />
       );
     }
@@ -5930,26 +6033,15 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
         .sort((a, b) => b[1].length - a[1].length)
         .slice(0, 6)
     : [];
-  // Item 7: diagnosis feeding forward into what to try next -- scans the
-  // built-in map library (client-side, no AI) for words matching this
-  // student's weakest clue type that they haven't already encountered, so
-  // History suggests a concrete next step instead of stopping at "here's
-  // the gap."
   const historyWeakest = hasHistory ? weakestClueType(studentStats.breakdown) : null;
-  const recommendedPicks = (() => {
-    if (!historyWeakest || !wordHistory) return [];
-    const seen = new Set(Object.keys(wordHistory));
-    const candidates = [];
-    for (const mapId of Object.keys(PASSAGES)) {
-      const p = PASSAGES[mapId];
-      for (const w of p.words) {
-        if (w.clueType === historyWeakest.type && !seen.has(w.word.toLowerCase())) {
-          candidates.push({ word: w.word, mapTitle: p.title, mapEmoji: p.emoji });
-        }
-      }
-    }
-    return candidates.slice(0, 3);
-  })();
+  // Suggested Next Step (item 7, and the report mockup's headline
+  // forward-looking CTA): prefers the persistent all-time weakest clue
+  // type when there's real history to draw on, falls back to THIS
+  // session's own breakdown (minTotal 1, since a single ~5-word session
+  // rarely has 2+ words of the same clue type) so even a first-ever
+  // session gets a concrete suggestion, not just returning students with
+  // 2+ tracked sessions.
+  const nextStepWeakest = historyWeakest || weakestClueType(glance.breakdown, 1);
 
   return (
     <div className="max-w-4xl mx-auto px-6 py-8 step-in relative">
@@ -6086,13 +6178,13 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
               classPatternFor in FileBoxScreen) -- proves this is a real,
               counted cross-student finding, not a banner shown on every
               report regardless of whether it's actually true. */}
-          {classPattern && (
+          {effectiveClassPattern && (
             <div className="p-5 rounded-3xl step-in" style={{ background: "linear-gradient(135deg,#eff6ff,#dbeafe)", border: "3px solid #2563eb", boxShadow: "0 3px 0 0 #1d4ed8" }}>
               <p className="font-display font-800 text-xs uppercase tracking-wide text-blue-800 mb-2">
-                🏫 Class Pattern <span className="ml-1 font-body font-800 text-[10px] normal-case tracking-normal text-white bg-blue-600 rounded-full px-2 py-0.5">counted across {classPattern.classSize} students</span>
+                🏫 Class Pattern <span className="ml-1 font-body font-800 text-[10px] normal-case tracking-normal text-white bg-blue-600 rounded-full px-2 py-0.5">counted across {effectiveClassPattern.classSize} students</span>
               </p>
               <p className="font-body text-sm text-blue-900 leading-relaxed">
-                <b>{classPattern.matchingCount} students</b> in {classPattern.className} share this same gap — struggling specifically with <b className="capitalize">{classPattern.type}</b>-clue words: {classPattern.matchingNames.join(", ")}.
+                <b>{effectiveClassPattern.matchingCount} students</b> in {effectiveClassPattern.className} share this same gap — struggling specifically with <b className="capitalize">{effectiveClassPattern.type}</b>-clue words: {effectiveClassPattern.matchingNames.join(", ")}.
               </p>
               <p className="font-body text-[11px] text-blue-600 mt-2">🔢 Counted directly from each student's logged history, not AI</p>
             </div>
@@ -6233,6 +6325,26 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
                 </p>
                 <RichReportText text={summary.whatToTry} className="text-amber-900" boldColorClass="text-amber-950 font-800" linkWords={log.map((e) => e.word)} onWordClick={jumpToWordRow} />
               </div>
+
+              {/* 4. Suggested Next Step: the one actionable follow-up, not
+                  buried behind the separate History toggle (unlike the
+                  card this replaced) and not gated on 2+ tracked sessions
+                  either -- nextStepWeakest falls back to THIS session's
+                  own breakdown, so even a first-ever session gets one. */}
+              {nextStepWeakest && (
+                <div className="p-6 rounded-3xl" style={{ background: "#ede9fe", border: "4px solid #7c3aed" }}>
+                  <p className="font-display font-800 text-xs uppercase tracking-wide text-violet-800 mb-2">🧭 Suggested Next Step</p>
+                  <p className="font-body text-sm text-violet-900 leading-relaxed mb-3">
+                    Since <b className="capitalize">{nextStepWeakest.type}</b>-clue words have been {studentId}'s biggest gap{historyWeakest ? " across their sessions" : " today"}, try a passage built specifically around <b className="capitalize">{nextStepWeakest.type}</b> clues to build on this practice.
+                  </p>
+                  <button
+                    onClick={() => { SFX.tap(); onCreateTargetedPassage?.(nextStepWeakest.type); }}
+                    className="font-display font-700 text-xs text-white bg-violet-600 hover:bg-violet-700 rounded-full px-4 py-2"
+                  >
+                    🧭 Create a targeted passage →
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
@@ -6310,21 +6422,6 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
                       ))}
                     </div>
                     <p className="font-body text-[11px] text-indigo-500 mt-2">🔢 Every past encounter of a repeated word, oldest to newest</p>
-                  </div>
-                )}
-
-                {recommendedPicks.length > 0 && (
-                  <div className="p-4 rounded-2xl bg-white" style={{ border: "3px solid #4f46e5" }}>
-                    <p className="font-display font-800 text-xs uppercase tracking-wide text-indigo-800 mb-2">🎯 Recommended Next Words</p>
-                    <p className="font-body text-sm text-indigo-900 mb-2">
-                      Since <b className="capitalize">{historyWeakest.type}</b>-clue words have been their biggest gap, these unfamiliar words specifically test that skill:
-                    </p>
-                    <div className="space-y-1">
-                      {recommendedPicks.map((c) => (
-                        <p key={c.word} className="font-body text-xs text-indigo-800"><b>{c.word}</b> — {c.mapEmoji} {c.mapTitle}</p>
-                      ))}
-                    </div>
-                    <p className="font-body text-[11px] text-indigo-500 mt-2">🔢 Picked from the built-in map library, not AI</p>
                   </div>
                 )}
 
@@ -6698,7 +6795,7 @@ function BuildYourOwnScreen({ onBack }) {
 // session's full report) rather than separate screen types, since all
 // three share the same back-and-forth navigation and none of them are
 // ever reachable except through this one entry point.
-function FileBoxScreen({ onBack }) {
+function FileBoxScreen({ onBack, onCreateTargetedPassage }) {
   const [view, setView] = useState("roster"); // "roster" | "sessions" | "detail"
   const [roster, setRoster] = useState(null);
   const [classStats, setClassStats] = useState(null);
@@ -6878,6 +6975,7 @@ function FileBoxScreen({ onBack }) {
           onReset={() => setView("sessions")}
           hideResetSection
           classPattern={detailStudent ? classPatternFor(detailStudent) : null}
+          onCreateTargetedPassage={onCreateTargetedPassage}
         />
       );
     }
@@ -7388,6 +7486,16 @@ export default function App() {
   // the CORRECT session (see saveTeacherNotes), not available any other
   // way in the live post-session flow.
   const [savedSessionId, setSavedSessionId] = useState(null);
+  // The report's "Suggested Next Step" card hands off a clue-type focus
+  // (e.g. "inference") to the Level Maker -- consumed once on SetupScreen's
+  // next mount (see onMakerFocusConsumed) so a LATER, unrelated trip back
+  // to "setup" (e.g. Switch Student) doesn't stay stuck re-opening the
+  // maker with a stale focus from a previous report.
+  const [makerFocusHint, setMakerFocusHint] = useState(null);
+  function handleCreateTargetedPassage(clueType) {
+    setMakerFocusHint(clueType || null);
+    setScreen("setup");
+  }
   const [log, setLog] = useState([]);
   const [solvedWords, setSolvedWords] = useState([]);
   const [activeWord, setActiveWord] = useState(null);
@@ -7642,6 +7750,8 @@ export default function App() {
             }}
             onOpenFileBox={() => setScreen("file-box")}
             onOpenTeacherTools={() => setScreen("teacher-tools")}
+            initialMakerFocus={makerFocusHint}
+            onMakerFocusConsumed={() => setMakerFocusHint(null)}
           />
         )}
         {screen === "demo-report" && (
@@ -7653,9 +7763,11 @@ export default function App() {
             sessionStartedAt={Date.now() - 600000}
             comprehensionResult={SAMPLE_COMPREHENSION}
             isDemo
+            classPattern={SAMPLE_CLASS_PATTERN}
+            onCreateTargetedPassage={handleCreateTargetedPassage}
           />
         )}
-        {screen === "file-box" && <FileBoxScreen onBack={() => setScreen("setup")} />}
+        {screen === "file-box" && <FileBoxScreen onBack={() => setScreen("setup")} onCreateTargetedPassage={handleCreateTargetedPassage} />}
         {screen === "teacher-guide" && <TeacherGuideScreen onBack={() => setScreen("setup")} />}
         {screen === "build-your-own" && <BuildYourOwnScreen onBack={() => setScreen("setup")} />}
         {screen === "teacher-tools" && (
@@ -7746,7 +7858,18 @@ export default function App() {
           />
         )}
         {screen === "teacher" && (
-          <TeacherScreen studentId={studentId} realStudentId={studentAuth?.student?.id} sessionId={savedSessionId} log={log} onBack={() => setScreen("passage")} onReset={handleReset} sessionStartedAt={sessionStartedAt} comprehensionResult={comprehensionResult} />
+          <TeacherScreen
+            studentId={studentId}
+            realStudentId={studentAuth?.student?.id}
+            sessionId={savedSessionId}
+            log={log}
+            onBack={() => setScreen("passage")}
+            onReset={handleReset}
+            sessionStartedAt={sessionStartedAt}
+            comprehensionResult={comprehensionResult}
+            selfComputeClassPattern
+            onCreateTargetedPassage={handleCreateTargetedPassage}
+          />
         )}
       </main>
     </div>
