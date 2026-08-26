@@ -3515,6 +3515,11 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onSkip
   const [postPhase, setPostPhase] = useState(null); // null | "gotItVia" | "whichClue" | "transfer"
   const [gotItVia, setGotItVia] = useState(null);
   const [clueIdentified, setClueIdentified] = useState(null);
+  // Demo Mode only: once a reflection answer is picked, the small reflection
+  // buttons are replaced by one large, deliberate "skip ahead" button --
+  // never shown at the same time as the answer choices, so it can't be
+  // mistaken for one of them.
+  const [demoAwaitingSkip, setDemoAwaitingSkip] = useState(false);
   const [transferLoading, setTransferLoading] = useState(false);
   const [transferData, setTransferData] = useState(null);
   const [transferPassed, setTransferPassed] = useState(null);
@@ -3823,7 +3828,7 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onSkip
   // the live region would go silent right after the "you got it!" message,
   // even though there's a new question on screen for a sighted student.
   function getReflectionAnnouncement() {
-    if (postPhase === "gotItVia") return "How did you get it?";
+    if (postPhase === "gotItVia") return demoAwaitingSkip ? "Reflection recorded. Ready to see the report?" : "How did you get it?";
     if (postPhase === "whichClue") return "Which part gave it away?";
     if (postPhase === "transfer") {
       if (transferLoading) return "One more check, a brand-new sentence…";
@@ -3928,6 +3933,8 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onSkip
     setGotItVia(value);
     if (value === "clues") {
       setPostPhase("whichClue");
+    } else if (demoModeActive) {
+      setDemoAwaitingSkip(true);
     } else {
       proceedAfterReflection(value, null);
     }
@@ -3936,7 +3943,12 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onSkip
   function handleWhichClue(chunk) {
     SFX.tap();
     setClueIdentified(chunk);
-    proceedAfterReflection("clues", chunk);
+    if (demoModeActive) {
+      setPostPhase("gotItVia");
+      setDemoAwaitingSkip(true);
+    } else {
+      proceedAfterReflection("clues", chunk);
+    }
   }
 
   function proceedAfterReflection(gotItViaValue, clueValue) {
@@ -4018,8 +4030,8 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onSkip
     onSkipToReport({
       ...base,
       priorKnowledge,
-      gotItVia: "clues",
-      clueIdentified: null,
+      gotItVia,
+      clueIdentified,
       transferPassed: null,
       timeToAnswerSec: wordStartRef.current ? Math.round((Date.now() - wordStartRef.current) / 1000) : null,
       minGateSec: Math.round(gateMsAccumRef.current / 1000),
@@ -4528,7 +4540,7 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onSkip
                 </form>
               )}
 
-              {postPhase === "gotItVia" && (
+              {postPhase === "gotItVia" && !demoAwaitingSkip && (
                 <div className="text-center py-4 step-in">
                   <p className="font-hand text-2xl text-teal-600 mb-4">
                     How did you get it?
@@ -4538,15 +4550,27 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onSkip
                     <ReflectionButton onClick={() => handleGotItVia("clues")} ms="Saya guna petunjuk">🔍 I used the clues</ReflectionButton>
                     <ReflectionButton onClick={() => handleGotItVia("guessed")} ms="Saya meneka">🎲 I guessed</ReflectionButton>
                   </div>
-                  {demoModeActive && (
-                    <button
-                      onClick={() => { SFX.tap(); skipToReport(); }}
-                      className="mt-5 font-display font-700 text-xs text-violet-700 hover:text-violet-900 bg-white rounded-full px-3 py-1.5 border-2"
-                      style={{ borderColor: "#7c3aed" }}
-                    >
-                      ⏩ Skip ahead to the report
-                    </button>
-                  )}
+                </div>
+              )}
+
+              {postPhase === "gotItVia" && demoAwaitingSkip && (
+                <div className="text-center py-6 step-in">
+                  <p
+                    className="mb-2 px-3 py-1.5 rounded-full inline-block font-display font-800 text-xs"
+                    style={{ background: "#ede9fe", border: "2px solid #7c3aed", color: "#5b21b6" }}
+                  >
+                    🎬 DEMO MODE
+                  </p>
+                  <p className="font-hand text-2xl text-teal-600 mb-5">
+                    Reflection recorded. Ready to see the report?
+                  </p>
+                  <button
+                    onClick={() => { SFX.tap(); skipToReport(); }}
+                    className="w-full max-w-sm mx-auto block font-display font-800 text-2xl text-white rounded-3xl px-8 py-6 transition-all hover:scale-[1.03] active:scale-95 active:translate-y-1"
+                    style={{ background: "linear-gradient(180deg,#a78bfa,#7c3aed)", boxShadow: "0 6px 0 0 #5b21b6" }}
+                  >
+                    ⏩ Skip ahead to the report
+                  </button>
                 </div>
               )}
 
@@ -6632,7 +6656,7 @@ function TeacherGuideScreen({ onBack }) {
 
       <Section icon="🎬" title="Demo Mode">
         <p>A toggle on the main menu for presenting or exploring without spending real AI calls or creating real student data. With it on, every AI reply is instant and scripted instead of a real network call, and no real student account or session ever gets saved — a genuine sandbox, not just a faster version of the real thing.</p>
-        <p>Inside a Demo Mode session, once you've played one word for real through all 5 stages, a "⏩ Skip ahead to the report" button appears — it fills in the rest of that passage's words with varied (synthesized, clearly not-real) results and jumps straight to a fully generated report, for showing the whole arc in a live demo without playing every single word.</p>
+        <p>Inside a Demo Mode session, once you've played one word for real through all 5 stages and answered "How did you get it?", a large "⏩ Skip ahead to the report" button takes over the screen on its own — it fills in the rest of that passage's words with varied (synthesized, clearly not-real) results and jumps straight to a fully generated report, for showing the whole arc in a live demo without playing every single word. It only ever appears after that reflection answer, and never alongside it, so it can't be tapped by accident.</p>
       </Section>
     </div>
   );
