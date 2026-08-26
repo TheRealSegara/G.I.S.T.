@@ -183,6 +183,14 @@ function getSentenceContaining(text, word) {
   return text;
 }
 
+// Mirrors splitIntoSentences in src/App.jsx -- used by reverse_clue below
+// to offer real OTHER sentences from the passage, not fabricated ones,
+// since the real frontend's validator checks every option is a genuine
+// substring of the actual passage text.
+function splitIntoSentences(text) {
+  return (text.match(/[^.!?]+[.!?]+/g) || (text ? [text] : [])).map(function (s) { return s.trim(); }).filter(Boolean);
+}
+
 const STOPWORDS_LIST = ["about", "after", "again", "their", "there", "these", "those", "which", "while", "would", "could", "should", "because", "before", "between", "through", "though", "where", "when", "what", "were", "being", "doing", "having", "other", "really", "still", "every", "never", "always", "something", "someone", "anything", "around", "across", "toward", "towards", "during", "without", "within", "under", "above", "below", "first", "second", "third", "little", "great", "large", "quite"];
 const STOPWORDS = {};
 STOPWORDS_LIST.forEach(function (w) { STOPWORDS[w] = true; });
@@ -447,14 +455,27 @@ function mockClaude(promptId, messages) {
         const message = hintGiven ? "Not quite, look again!" : "Tap the word that's used wrong!";
         return { message: message, display_sentence: tokens.join(" ") + ".", input_type: "tap_select", options: pickOptionsFromTokens(tokens, word, 4), word_tiles: null, correct_answer: word, sentence_starter: null, stage: 3, grading_reasoning: null, hint_given: hintGiven, resolved: false, fun_fact: null };
       }
-      const rawTokens = groundedSentence.replace(/[.,!?;:"']/g, "").split(/\s+/).filter(Boolean);
-      const usableTokens = rawTokens.filter(function (t) { return t.toLowerCase() !== word.toLowerCase(); });
-      const tokens = usableTokens.length >= 3 ? rawTokens : ["Everyone", "noticed", "how", word, "seemed", "today"];
-      const sentence = usableTokens.length >= 3 ? groundedSentence : tokens.join(" ") + ".";
-      const clueCandidates = tokens.filter(function (t) { return t.toLowerCase() !== word.toLowerCase() && t.length > 3; });
-      const clueToken = clueCandidates[0] || tokens.filter(function (t) { return t.toLowerCase() !== word.toLowerCase(); })[0] || word;
-      const message = hintGiven ? "Not quite, look again!" : "Which word is the clue?";
-      return { message: message, display_sentence: sentence, input_type: "reverse_clue", options: pickOptionsFromTokens(tokens, clueToken, 4), word_tiles: null, correct_answer: clueToken, sentence_starter: null, stage: 3, grading_reasoning: null, hint_given: hintGiven, resolved: false, fun_fact: null };
+      // reverse_clue now tests whole-passage comprehension: the student
+      // picks which OTHER sentence explains the target word's meaning,
+      // not a single word from its own sentence. Every option must be a
+      // real, verbatim sentence from the actual passage -- the real
+      // frontend's validator checks this, so fabricating one here would
+      // fail validation on every retry rather than just look wrong.
+      const wordRe = new RegExp("\\b" + word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b", "i");
+      const otherSentences = splitIntoSentences(passageText).filter(function (s) { return !wordRe.test(s); });
+      if (otherSentences.length >= 3) {
+        const picked = otherSentences.slice(0, 3);
+        const correctSentence = picked[0];
+        const options = picked.slice().sort(function () { return Math.random() - 0.5; });
+        const message = hintGiven ? "Not quite, think back through the story!" : "Which sentence explains why?";
+        return { message: message, display_sentence: groundedSentence, input_type: "reverse_clue", options: options, word_tiles: null, correct_answer: correctSentence, sentence_starter: null, stage: 3, grading_reasoning: null, hint_given: hintGiven, resolved: false, fun_fact: null };
+      }
+      // Passage too short to offer 3 genuine OTHER sentences (shouldn't
+      // happen for a real 80-150 word passage) -- fall back to tap_select
+      // rather than risk an option the real validator can't confirm.
+      const fallbackTokens = ["Somehow", "the", "weather", "felt", word, "again", "today"];
+      const fallbackMessage = hintGiven ? "Not quite, look again!" : "Tap the word that's used wrong!";
+      return { message: fallbackMessage, display_sentence: fallbackTokens.join(" ") + ".", input_type: "tap_select", options: pickOptionsFromTokens(fallbackTokens, word, 4), word_tiles: null, correct_answer: word, sentence_starter: null, stage: 3, grading_reasoning: null, hint_given: hintGiven, resolved: false, fun_fact: null };
     }
 
     // Stage 4: finish the sentence. Grading is generous, same as the real

@@ -7,8 +7,10 @@
 // endpoint the app itself calls, and asserts the same content-level
 // invariants added to `validateCoachResponse` in src/App.jsx: no MCQ option
 // is the target word itself, word_bank/letter_connect tiles are exactly the
-// target word's own letters, and tap_select/reverse_clue options are real
-// words from the sentence, never hallucinated.
+// target word's own letters, tap_select options are real words from the
+// sentence (never hallucinated), and reverse_clue options are real OTHER
+// sentences copied verbatim from the passage (never the target word's own
+// sentence, never invented).
 //
 // NOTE: the validation logic below is a standalone copy of the same
 // checks in src/App.jsx's validateCoachResponse (that file is JSX, not
@@ -58,6 +60,22 @@ function optionInSentence(option, sentence) {
   const sentenceWords = stripPunctForCompare(sentence).split(/\s+/);
   return sentenceWords.includes(cleanOption);
 }
+function splitIntoSentences(text) {
+  return (String(text).match(/[^.!?]+[.!?]+/g) || [text]).map((s) => s.trim()).filter(Boolean);
+}
+function normalizeSentenceForCompare(s) {
+  return stripPunctForCompare(s).replace(/\s+/g, " ").trim();
+}
+function sentenceInPassage(candidate, passageText) {
+  const target = normalizeSentenceForCompare(candidate);
+  if (!target || !passageText) return false;
+  return splitIntoSentences(passageText).some((s) => normalizeSentenceForCompare(s) === target);
+}
+function getSentenceContaining(text, word) {
+  const sentences = splitIntoSentences(text);
+  const found = sentences.find((s) => s.toLowerCase().includes(String(word).toLowerCase()));
+  return found || sentences[0] || text;
+}
 function wordCount(s) {
   return String(s).trim().split(/\s+/).filter(Boolean).length;
 }
@@ -70,7 +88,7 @@ const MESSAGE_MAX_WORDS_PER_SENTENCE = 12;
 const MCQ_OPTION_MAX_WORDS = 5;
 
 // Returns a list of violation strings (empty = clean).
-function checkInvariants(parsed, targetWord) {
+function checkInvariants(parsed, targetWord, passageText) {
   const violations = [];
   if (parsed.input_type === "mcq" && Array.isArray(parsed.options)) {
     if (parsed.options.some((opt) => isTargetWordMatch(opt, targetWord))) {
@@ -83,11 +101,28 @@ function checkInvariants(parsed, targetWord) {
   if ((parsed.input_type === "word_bank" || parsed.input_type === "letter_connect") && !tilesMatchWord(parsed.word_tiles, targetWord)) {
     violations.push(`word_tiles don't match "${targetWord}": ${JSON.stringify(parsed.word_tiles)}`);
   }
-  if ((parsed.input_type === "tap_select" || parsed.input_type === "reverse_clue") && Array.isArray(parsed.options)) {
+  if (parsed.input_type === "tap_select" && Array.isArray(parsed.options)) {
     const bad = parsed.options.filter((opt) => !optionInSentence(opt, parsed.display_sentence));
     if (bad.length) violations.push(`option(s) not actually in display_sentence: ${JSON.stringify(bad)} (sentence: "${parsed.display_sentence}")`);
     if (parsed.options.length < 3 || parsed.options.length > 6) {
-      violations.push(`${parsed.input_type} has ${parsed.options.length} options, expected 3-6: ${JSON.stringify(parsed.options)}`);
+      violations.push(`tap_select has ${parsed.options.length} options, expected 3-6: ${JSON.stringify(parsed.options)}`);
+    }
+  }
+  // reverse_clue now asks the student to pick a whole OTHER sentence from
+  // the passage explaining the target word, not a single word from its
+  // own sentence -- mirrors the sentence-level checks added to
+  // validateCoachResponse in src/App.jsx.
+  if (parsed.input_type === "reverse_clue" && Array.isArray(parsed.options)) {
+    if (parsed.options.length !== 3) {
+      violations.push(`reverse_clue has ${parsed.options.length} options, expected exactly 3: ${JSON.stringify(parsed.options)}`);
+    }
+    if (passageText) {
+      const bad = parsed.options.filter((opt) => !sentenceInPassage(opt, passageText));
+      if (bad.length) violations.push(`reverse_clue option(s) aren't real sentences copied from the passage: ${JSON.stringify(bad)}`);
+      const ownSentence = normalizeSentenceForCompare(getSentenceContaining(passageText, targetWord));
+      if (parsed.options.some((opt) => normalizeSentenceForCompare(opt) === ownSentence)) {
+        violations.push(`reverse_clue offered the target word's own sentence as an option (circular): ${JSON.stringify(parsed.options)}`);
+      }
     }
   }
   if (parsed.input_type === "true_false") {
@@ -136,9 +171,18 @@ async function callGroq(system, messages) {
 // question-phrasing or reverse_clue Stage-3-framing bugs found in the
 // coach quality audit, since neither type appears in that combo. ---
 
+// Multi-sentence passages, not single sentences -- reverse_clue's options
+// are now OTHER sentences from the passage, so a one-sentence passage
+// would leave the model with no real sentence to offer at all.
 const SCENARIOS = [
-  { word: "resilient", passage: "After the storm, the old village was resilient and quickly rebuilt its homes." },
-  { word: "camouflage", passage: "The gecko used its camouflage to blend perfectly into the green leaves." },
+  {
+    word: "resilient",
+    passage: "After the storm, the old village was resilient and quickly rebuilt its homes. Fallen trees were cleared within days, and neighbors helped each other repair broken roofs. Nobody complained or gave up, even when the work was hard. By the next season, the village looked almost as good as before.",
+  },
+  {
+    word: "camouflage",
+    passage: "The gecko used its camouflage to blend perfectly into the green leaves. A hungry bird flew right past without ever noticing it was there. Its skin had slowly changed color to match the plant it rested on. Only a very close look would reveal it was hiding at all.",
+  },
 ];
 
 const TYPE_COMBOS = [
@@ -161,7 +205,7 @@ async function runScenario(scenario, typeCombo, runIndex) {
       violations.push(`[${label}] Stage ${stage} call failed: ${e.message}`);
       return violations;
     }
-    violations.push(...checkInvariants(parsed, scenario.word).map((v) => `[${label}, stage ${stage}] ${v}`));
+    violations.push(...checkInvariants(parsed, scenario.word, scenario.passage).map((v) => `[${label}, stage ${stage}] ${v}`));
     if (stage === 3) break;
     history.push({ role: "assistant", content: JSON.stringify(parsed) });
     // Deterministic types (mcq/true_false/tap_select/reverse_clue) have a

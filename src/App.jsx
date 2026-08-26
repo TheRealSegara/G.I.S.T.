@@ -684,7 +684,7 @@ const INPUT_TYPE_INSTRUCTIONS = {
   tap_select: { icon: "👆", text: "Tap the wrong word" },
   word_bank: { icon: "🔤", text: "Tap the letters to spell it" },
   letter_connect: { icon: "🔗", text: "Connect the letters to spell it" },
-  reverse_clue: { icon: "🕵️", text: "Tap the clue that helped you" },
+  reverse_clue: { icon: "🕵️", text: "Tap the sentence that explains it" },
   text: { icon: "✍️", text: "Type your answer" },
 };
 
@@ -1267,14 +1267,36 @@ function stripPunctForCompare(s) {
   return String(s).toLowerCase().replace(/[.,!?;:"'()]/g, "").trim();
 }
 
-// tap_select/reverse_clue options are supposed to be display_sentence's own
-// words, split individually — confirms an option isn't a hallucinated token
-// that never actually appeared in the sentence.
+// tap_select options are supposed to be display_sentence's own words, split
+// individually — confirms an option isn't a hallucinated token that never
+// actually appeared in the sentence.
 function optionInSentence(option, sentence) {
   const cleanOption = stripPunctForCompare(option);
   if (!cleanOption) return false;
   const sentenceWords = stripPunctForCompare(sentence).split(/\s+/);
   return sentenceWords.includes(cleanOption);
+}
+
+// Splits a full passage into its individual sentences. Shared by
+// reverse_clue's validation (below) and PassageScreen's own reveal-by-
+// sentence logic — same regex, kept in one place rather than duplicated.
+function splitIntoSentences(text) {
+  return (String(text).match(/[^.!?]+[.!?]+/g) || [text]).map((s) => s.trim()).filter(Boolean);
+}
+
+function normalizeSentenceForCompare(s) {
+  return stripPunctForCompare(s).replace(/\s+/g, " ").trim();
+}
+
+// reverse_clue's options are now whole sentences the model is supposed to
+// copy verbatim from elsewhere in the passage, not words it's free to
+// invent — confirms an option is a genuine, unmodified sentence from the
+// passage text the student was actually given, not a paraphrase or a
+// hallucinated one.
+function sentenceInPassage(candidate, passageText) {
+  const target = normalizeSentenceForCompare(candidate);
+  if (!target || !passageText) return false;
+  return splitIntoSentences(passageText).some((s) => normalizeSentenceForCompare(s) === target);
 }
 
 function escapeRegex(s) {
@@ -1301,7 +1323,7 @@ function textLikelyContainsWord(text, targetWord) {
   return new RegExp(`\\b${escapeRegex(stem)}`).test(t);
 }
 
-function validateCoachResponse(parsed, targetWordText) {
+function validateCoachResponse(parsed, targetWordText, passageText) {
   if (!parsed || typeof parsed.message !== "string" || !parsed.message.trim()) return false;
   if (typeof parsed.display_sentence !== "string" || !parsed.display_sentence.trim()) return false;
   if (!COACH_INPUT_TYPES.has(parsed.input_type)) return false;
@@ -1314,7 +1336,10 @@ function validateCoachResponse(parsed, targetWordText) {
   if (COACH_TYPES_NEEDING_OPTIONS.has(parsed.input_type)) {
     if (!Array.isArray(parsed.options) || parsed.options.length < 2) return false;
     if (parsed.input_type === "true_false" && parsed.options.length !== 2) return false;
-    if ((parsed.input_type === "tap_select" || parsed.input_type === "reverse_clue") && (parsed.options.length < 3 || parsed.options.length > 6)) return false;
+    if (parsed.input_type === "tap_select" && (parsed.options.length < 3 || parsed.options.length > 6)) return false;
+    // reverse_clue's options are now 3 full sentences (one explanatory,
+    // two real-but-wrong), not a 3-6 range of single words.
+    if (parsed.input_type === "reverse_clue" && parsed.options.length !== 3) return false;
     if (typeof parsed.correct_answer !== "string" || !parsed.options.includes(parsed.correct_answer)) return false;
   }
   if (COACH_TYPES_NEEDING_TILES.has(parsed.input_type) && (!Array.isArray(parsed.word_tiles) || parsed.word_tiles.length === 0)) {
@@ -1345,8 +1370,17 @@ function validateCoachResponse(parsed, targetWordText) {
   if (COACH_TYPES_NEEDING_TILES.has(parsed.input_type) && !tilesMatchWord(parsed.word_tiles, targetWordText)) {
     return false;
   }
-  if ((parsed.input_type === "tap_select" || parsed.input_type === "reverse_clue") && Array.isArray(parsed.options)) {
+  if (parsed.input_type === "tap_select" && Array.isArray(parsed.options)) {
     if (!parsed.options.every((opt) => optionInSentence(opt, parsed.display_sentence))) return false;
+  }
+  if (parsed.input_type === "reverse_clue" && Array.isArray(parsed.options) && passageText) {
+    // Every option must be a real, unmodified sentence copied from the
+    // passage the student was actually given -- not paraphrased, not
+    // hallucinated, and not the sentence containing the target word
+    // itself (explaining a word with its own sentence is circular).
+    if (!parsed.options.every((opt) => sentenceInPassage(opt, passageText))) return false;
+    const ownSentence = normalizeSentenceForCompare(getSentenceContaining(passageText, targetWordText));
+    if (parsed.options.some((opt) => normalizeSentenceForCompare(opt) === ownSentence)) return false;
   }
   return true;
 }
@@ -3690,7 +3724,7 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onSkip
     const openingMsg = `Passage: "${passage.text}"\n\nStart coaching for the target word "${targetWord.word}". Begin at Stage 1.`;
     const msgs = [{ role: "user", content: openingMsg }];
     try {
-      const parsed = await callClaudeWithRetry("coach", { companionId: avatarConfig.companion, stage1Type, stage2Type, stage3Type }, msgs, MAX_RETRY_ATTEMPTS, (p) => validateCoachResponse(p, targetWord.word));
+      const parsed = await callClaudeWithRetry("coach", { companionId: avatarConfig.companion, stage1Type, stage2Type, stage3Type }, msgs, MAX_RETRY_ATTEMPTS, (p) => validateCoachResponse(p, targetWord.word, passage.text));
       setHistory([...msgs, { role: "assistant", content: JSON.stringify(parsed) }]);
       setCurrent(parsed);
       setStageReached(parsed.stage || 1);
@@ -3764,7 +3798,7 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onSkip
     }
     const newHistory = [...history, { role: "user", content: answerText + factNote }];
     try {
-      const parsed = await callClaudeWithRetry("coach", { companionId: avatarConfig.companion, stage1Type, stage2Type, stage3Type }, newHistory, MAX_RETRY_ATTEMPTS, (p) => validateCoachResponse(p, targetWord.word));
+      const parsed = await callClaudeWithRetry("coach", { companionId: avatarConfig.companion, stage1Type, stage2Type, stage3Type }, newHistory, MAX_RETRY_ATTEMPTS, (p) => validateCoachResponse(p, targetWord.word, passage.text));
       const updatedHistory = [...newHistory, { role: "assistant", content: JSON.stringify(parsed) }];
       setHistory(updatedHistory);
       if (parsed.hint_given) hintsUsedRef.current += 1;
@@ -4243,7 +4277,7 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onSkip
                   : wrongUsage
                   ? { border: INPUT_TYPE_ACCENT.tap_select.border, shadow: INPUT_TYPE_ACCENT.tap_select.shadow, label: " — something's off here, can you spot it?", labelClass: "text-amber-700" }
                   : current.input_type === "reverse_clue"
-                  ? { border: INPUT_TYPE_ACCENT.reverse_clue.border, shadow: INPUT_TYPE_ACCENT.reverse_clue.shadow, label: " — read closely for the clue", labelClass: "text-teal-700" }
+                  ? { border: INPUT_TYPE_ACCENT.reverse_clue.border, shadow: INPUT_TYPE_ACCENT.reverse_clue.shadow, label: " — the answer is elsewhere in the passage", labelClass: "text-teal-700" }
                   : { border: "#0d9488", shadow: "#0f766e", label: "", labelClass: "text-teal-700" };
                 return (
                   <div
@@ -4327,8 +4361,8 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onSkip
                 </div>
               )}
 
-              {isLatestSlide && postPhase === null && !loading && !answersLocked && current && (current.input_type === "tap_select" || current.input_type === "reverse_clue") && current.options && (() => {
-                const accent = INPUT_TYPE_ACCENT[current.input_type];
+              {isLatestSlide && postPhase === null && !loading && !answersLocked && current && current.input_type === "tap_select" && current.options && (() => {
+                const accent = INPUT_TYPE_ACCENT.tap_select;
                 return (
                   <div
                     className={`flex flex-wrap gap-3 justify-center rounded-2xl p-3 step-in answer-settle${answersEnabled ? " bounce-in" : ""}`}
@@ -4343,6 +4377,33 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onSkip
                         style={{ border: `3px solid ${accent.border}`, boxShadow: `0 3px 0 0 ${accent.shadow}` }}
                       >
                         {word}
+                      </button>
+                    ))}
+                  </div>
+                );
+              })()}
+
+              {/* reverse_clue's options are now 3 whole sentences pulled
+                  from elsewhere in the passage, not single words -- too
+                  long for the wrapped pill layout above, so this gets its
+                  own full-width stacked layout (closer to mcq's than
+                  tap_select's), same teal accent throughout. */}
+              {isLatestSlide && postPhase === null && !loading && !answersLocked && current && current.input_type === "reverse_clue" && current.options && (() => {
+                const accent = INPUT_TYPE_ACCENT.reverse_clue;
+                return (
+                  <div
+                    className={`flex flex-col gap-3 rounded-2xl p-3 step-in answer-settle${answersEnabled ? " bounce-in" : ""}`}
+                    style={{ ...settlingStyle(answersEnabled), background: accent.soft }}
+                  >
+                    {current.options.map((sentence, i) => (
+                      <button
+                        key={i}
+                        onClick={() => submitAnswer(sentence)}
+                        disabled={!answersEnabled}
+                        className="w-full text-left px-5 py-3.5 bg-white rounded-2xl font-body font-700 text-base sm:text-lg text-stone-700 transition-all hover:scale-[1.02]"
+                        style={{ border: `3px solid ${accent.border}`, boxShadow: `0 3px 0 0 ${accent.shadow}` }}
+                      >
+                        {sentence}
                       </button>
                     ))}
                   </div>
