@@ -5591,7 +5591,7 @@ function DiagnosticReportSkeleton() {
   );
 }
 
-function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log, onBack, onReset, sessionStartedAt, comprehensionResult, isDemo = false, initialSummary = null, onDiagnosticGenerated = null, hideResetSection = false }) {
+function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log, onBack, onReset, sessionStartedAt, comprehensionResult, isDemo = false, initialSummary = null, onDiagnosticGenerated = null, hideResetSection = false, classPattern = null }) {
   const demoModeActive = useDemoMode();
   const [summary, setSummary] = useState(initialSummary);
   const [loading, setLoading] = useState(false);
@@ -5799,6 +5799,7 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
           onBack={() => setViewingSessionId(null)}
           onReset={() => setViewingSessionId(null)}
           hideResetSection
+          classPattern={classPattern}
         />
       );
     }
@@ -5986,6 +5987,23 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
             <span className="flex items-center gap-1.5"><i className="inline-block w-3.5 h-3.5 rounded" style={{ background: "#fee2e2", border: "2px solid #dc2626" }} /> Headline diagnosis</span>
           </div>
 
+          {/* Class Pattern: only rendered when at least one classmate
+              shares this exact same weakest-clue-type gap (see
+              classPatternFor in FileBoxScreen) -- proves this is a real,
+              counted cross-student finding, not a banner shown on every
+              report regardless of whether it's actually true. */}
+          {classPattern && (
+            <div className="p-5 rounded-3xl step-in" style={{ background: "linear-gradient(135deg,#eff6ff,#dbeafe)", border: "3px solid #2563eb", boxShadow: "0 3px 0 0 #1d4ed8" }}>
+              <p className="font-display font-800 text-xs uppercase tracking-wide text-blue-800 mb-2">
+                🏫 Class Pattern <span className="ml-1 font-body font-800 text-[10px] normal-case tracking-normal text-white bg-blue-600 rounded-full px-2 py-0.5">counted across {classPattern.classSize} students</span>
+              </p>
+              <p className="font-body text-sm text-blue-900 leading-relaxed">
+                <b>{classPattern.matchingCount} students</b> in {classPattern.className} share this same gap — struggling specifically with <b className="capitalize">{classPattern.type}</b>-clue words: {classPattern.matchingNames.join(", ")}.
+              </p>
+              <p className="font-body text-[11px] text-blue-600 mt-2">🔢 Counted directly from each student's logged history, not AI</p>
+            </div>
+          )}
+
           {/* Closing the loop on "whatToTry" (item 5): what the PREVIOUS
               session suggested, plus a place to log whether it worked --
               only shown when there's a real prior session to reference. */}
@@ -6024,7 +6042,9 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
               so these stay visible by default even with details collapsed. */}
           <div className="grid grid-cols-2 gap-4">
             <div className="p-5 rounded-3xl" style={{ background: "#dbeafe", border: "3px solid #2563eb" }}>
-              <p className="font-display font-800 text-xs uppercase tracking-wide text-blue-800 mb-3">📊 At a Glance</p>
+              <p className="font-display font-800 text-xs uppercase tracking-wide text-blue-800 mb-3">
+                📊 At a Glance <span className="ml-1 font-body font-800 text-[10px] normal-case tracking-normal text-white bg-blue-600 rounded-full px-2 py-0.5">✓ Verified</span>
+              </p>
               <div className="space-y-1.5 font-body text-sm text-blue-900">
                 <div className="flex justify-between items-center border-b border-blue-200 pb-1"><span>Solved independently</span><b className="font-display text-xl leading-none">{glance.independent}</b></div>
                 <div className="flex justify-between items-center border-b border-blue-200 pb-1"><span>Needed hints</span><b className="font-display text-xl leading-none">{glance.withHelp}</b></div>
@@ -6095,17 +6115,28 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
               <div className="p-6 rounded-3xl text-center" style={{ background: "#fee2e2", border: "4px solid #dc2626" }}>
                 <p className="font-display font-800 text-xs uppercase tracking-wide text-red-800 mb-2">🎯 The Pattern</p>
                 <RichReportText text={summary.corePattern || summary.coreProblem} className="text-red-900" boldColorClass="text-red-950 font-800" linkWords={log.map((e) => e.word)} onWordClick={jumpToWordRow} />
+                {/* Named uncertainty rather than sounding equally confident
+                    regardless of sample size -- only the first tracked
+                    session for this student has nothing yet to compare
+                    against. */}
+                {studentStats && studentStats.sessionCount <= 1 && (
+                  <p className="font-body text-xs text-red-500 italic mt-2">Based on {studentId}'s first tracked session — this will sharpen as they play more.</p>
+                )}
               </div>
 
               {/* 2. How Reliable Is This */}
               <div className="p-6 rounded-3xl" style={{ background: "#fef3c7", border: "4px solid #d97706" }}>
-                <p className="font-display font-800 text-xs uppercase tracking-wide text-amber-800 mb-2">🧠 How Reliable Is This</p>
+                <p className="font-display font-800 text-xs uppercase tracking-wide text-amber-800 mb-2">
+                  🧠 How Reliable Is This <span className="ml-1 font-body font-800 text-[10px] normal-case tracking-normal text-white bg-amber-600 rounded-full px-2 py-0.5">🤖 AI-written</span>
+                </p>
                 <RichReportText text={summary.howReliable} className="text-amber-900" boldColorClass="text-amber-950 font-800" linkWords={log.map((e) => e.word)} onWordClick={jumpToWordRow} />
               </div>
 
               {/* 3. What To Try */}
               <div className="p-6 rounded-3xl" style={{ background: "linear-gradient(135deg,#fef3c7,#fde68a)", border: "4px solid #d97706" }}>
-                <p className="font-display font-800 text-xs uppercase tracking-wide text-amber-800 mb-2">💡 What To Try in Class</p>
+                <p className="font-display font-800 text-xs uppercase tracking-wide text-amber-800 mb-2">
+                  💡 What To Try in Class <span className="ml-1 font-body font-800 text-[10px] normal-case tracking-normal text-white bg-amber-600 rounded-full px-2 py-0.5">🤖 AI-written</span>
+                </p>
                 <RichReportText text={summary.whatToTry} className="text-amber-900" boldColorClass="text-amber-950 font-800" linkWords={log.map((e) => e.word)} onWordClick={jumpToWordRow} />
               </div>
             </div>
@@ -6625,6 +6656,38 @@ function FileBoxScreen({ onBack }) {
       .finally(() => { if (requestId === rosterRequestRef.current) setRosterLoading(false); });
   }, [selectedClassId, rosterRefreshKey]);
 
+  // Groups the currently-loaded roster by shared weakest-clue-type, e.g.
+  // { antonym: [studentA, studentB], example: [studentC] } -- the single
+  // source both the roster-wide "Shared Patterns" callout below and each
+  // individual student's "Class Pattern" card (passed into TeacherScreen)
+  // are computed from, so the two can never disagree with each other.
+  const sharedClueGroups = {};
+  for (const s of roster || []) {
+    if (!s.weakestClueType) continue;
+    const key = s.weakestClueType.type;
+    (sharedClueGroups[key] || (sharedClueGroups[key] = [])).push(s);
+  }
+  // A student's Class Pattern: only meaningful once at least one OTHER
+  // classmate shares the exact same gap -- otherwise it's just this one
+  // student's own pattern again, already shown elsewhere in their report.
+  function classPatternFor(student) {
+    if (!student?.weakestClueType || !roster) return null;
+    const group = sharedClueGroups[student.weakestClueType.type] || [];
+    const classmates = group.filter((s) => s.id !== student.id);
+    if (classmates.length === 0) return null;
+    const classSize = student.classId
+      ? roster.filter((s) => s.classId === student.classId).length
+      : roster.length;
+    const className = student.classId ? classes.find((c) => c.id === student.classId)?.name : null;
+    return {
+      type: student.weakestClueType.type,
+      matchingCount: classmates.length + 1,
+      classSize,
+      className: className || "this roster",
+      matchingNames: [student, ...classmates].map((s) => s.fullName),
+    };
+  }
+
   async function handleCreateClass() {
     const name = newClassName.trim();
     if (!name || classActionBusy) return;
@@ -6706,6 +6769,7 @@ function FileBoxScreen({ onBack }) {
 
   if (view === "detail") {
     if (!detailLoading && sessionDetail) {
+      const detailStudent = roster?.find((s) => s.id === sessionDetail.session.studentId);
       return (
         <TeacherScreen
           studentId={sessionDetail.session.studentName}
@@ -6719,6 +6783,7 @@ function FileBoxScreen({ onBack }) {
           onBack={() => setView("sessions")}
           onReset={() => setView("sessions")}
           hideResetSection
+          classPattern={detailStudent ? classPatternFor(detailStudent) : null}
         />
       );
     }
@@ -6976,22 +7041,18 @@ function FileBoxScreen({ onBack }) {
         // Items 2+8: turns the class-wide weakest-type stat above into an
         // actual scheduling decision -- which SPECIFIC students share the
         // same gap, grouped into a suggested small-group session, rather
-        // than just a class-wide percentage.
-        const groups = {};
-        for (const s of roster) {
-          if (!s.weakestClueType) continue;
-          const key = s.weakestClueType.type;
-          (groups[key] || (groups[key] = [])).push(s.fullName);
-        }
-        const sharedGroups = Object.entries(groups).filter(([, names]) => names.length >= 2);
+        // than just a class-wide percentage. Reuses sharedClueGroups (see
+        // above) so this and each student's own Class Pattern card can
+        // never disagree about who's in a group.
+        const sharedGroups = Object.entries(sharedClueGroups).filter(([, students]) => students.length >= 2);
         if (sharedGroups.length === 0) return null;
         return (
           <div className="mb-4 p-5 rounded-3xl relative z-10 step-in" style={{ background: "#ede9fe", border: "3px solid #7c3aed" }}>
             <p className="font-display font-800 text-xs uppercase tracking-wide text-violet-800 mb-2">🔍 Shared Patterns</p>
             <div className="space-y-1.5">
-              {sharedGroups.map(([type, names]) => (
+              {sharedGroups.map(([type, students]) => (
                 <p key={type} className="font-body text-sm text-violet-900">
-                  <b>{names.length} students</b> share a <b className="capitalize">{type}</b>-clue gap: {names.join(", ")} — consider a small group session.
+                  <b>{students.length} students</b> share a <b className="capitalize">{type}</b>-clue gap: {students.map((s) => s.fullName).join(", ")} — consider a small group session.
                 </p>
               ))}
             </div>
