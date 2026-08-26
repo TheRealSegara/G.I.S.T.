@@ -74,7 +74,7 @@ const FontImport = () => (
       .animate-pulse, .animate-bounce {
         animation: none !important;
       }
-      .answer-settle, .coach-scroll-dot {
+      .answer-settle, .coach-rail-thumb {
         transition: none !important;
       }
     }
@@ -91,9 +91,9 @@ const FontImport = () => (
        default on trackpads/macOS) and stretch to fill the screen
        regardless of how little a given exchange actually contained,
        leaving a scroll affordance nobody could see and a lot of blank
-       card below short answers. Rather than a generic OS scrollbar
-       (hidden here in favour of the dot trail below), dropping the
-       box's forced stretch (see coach-scrollbox usage below) lets its
+       card below short answers. The OS scrollbar is hidden here in
+       favour of the floating rail below (a real, draggable control, not
+       a decoration), and dropping the box's forced stretch lets its
        height follow its content instead. */
     .coach-scrollbox {
       scrollbar-width: none;
@@ -101,31 +101,29 @@ const FontImport = () => (
     .coach-scrollbox::-webkit-scrollbar {
       display: none;
     }
-    /* Scroll-position dots, deliberately styled to match the coach's
-       own "Stage 1 of 5" tracker (same teal/stone tokens, same dot
-       shape) rather than inventing a second visual language for "your
-       position in something" right next to the first one. */
-    .coach-scroll-dot-rail {
-      width: 2px;
-      background: #e7e5e4;
+    /* Floating scroll rail: lives outside the card in the gap next to
+       it, not inset inside the card's own padding, so it never competes
+       with the card's content or corners. */
+    .coach-rail-track {
+      background: #fef3c7;
       border-radius: 999px;
     }
-    .coach-scroll-dot {
+    .coach-rail-thumb {
       position: absolute;
-      left: 50%;
-      width: 13px;
-      height: 13px;
-      margin-left: -6.5px;
-      margin-top: -6.5px;
+      left: 3px;
+      right: 3px;
+      background: linear-gradient(180deg, #fbbf24, #d97706);
       border-radius: 999px;
-      background: #fff;
-      border: 3px solid #d6d3d1;
-      transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+      box-shadow: inset 0 0 0 1.5px rgba(255,255,255,0.55);
+      transition: top 0.08s linear, height 0.08s linear;
+      cursor: grab;
+      touch-action: none;
     }
-    .coach-scroll-dot.active {
-      background: #0d9488;
-      border-color: #0f766e;
-      transform: scale(1.25);
+    .coach-rail-thumb:active {
+      cursor: grabbing;
+    }
+    .coach-rail-track.dragging .coach-rail-thumb {
+      transition: none;
     }
   `}</style>
 );
@@ -341,8 +339,6 @@ function CompassRose({ size = 220, spin = false, className = "", tone = "gold" }
 // plain containers (like the cross-cutting close-confirm modal) with no
 // audience of its own. Replaces the old deckle-edge/parchment DECKLE (and
 // KID_CARD) shape.
-// Number of dots in CoachScreen's scroll-position trail (see scrollDotIndex).
-const SCROLL_DOT_COUNT = 6;
 const CARD_SHADOW = "0 4px 16px rgba(0,0,0,0.08)";
 // Heavier static shadow for the one "main thing" card on a screen, so it
 // visibly outranks the routine cards around it (which keep CARD_SHADOW).
@@ -3395,17 +3391,17 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onSkip
   const hintsUsedRef = useRef(0);
   const exchangeCountRef = useRef(0);
   const scrollRef = useRef(null);
-  // Visible scroll-position indicator for the chat card, drawn ourselves
-  // rather than relying on the OS scrollbar: real classrooms use a mix of
-  // trackpads (auto-hiding scrollbar) and tablets (no scrollbar at all),
-  // so a student can easily miss that there's more to scroll to. Styled as
-  // a vertical row of dots matching the "Stage 1 of 5" tracker above it,
-  // instead of a generic scrollbar, so the card doesn't speak two
-  // different visual languages for "your position in something." null
-  // means the card's content currently fits without scrolling, so nothing
-  // is drawn; otherwise it's the index of the dot nearest the current
-  // scroll position.
-  const [scrollDotIndex, setScrollDotIndex] = useState(null);
+  // Floating scroll rail, outside the card in the gap next to it, drawn
+  // and driven ourselves rather than relying on the OS scrollbar: real
+  // classrooms use a mix of trackpads (auto-hiding scrollbar) and tablets
+  // (no scrollbar at all), so a student can easily miss that there's more
+  // to scroll to. A real, draggable control (see the pointer handlers
+  // below), not just a decoration -- null means the card's content
+  // currently fits without scrolling, so nothing is drawn.
+  const [scrollThumb, setScrollThumb] = useState(null);
+  const railTrackRef = useRef(null);
+  const railDragRef = useRef(null);
+  const [railDragging, setRailDragging] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   // skipWord defers onWordResolved by 2.2s so the student has time to read
   // the reveal message. If they tap Back (or the parent otherwise unmounts
@@ -3578,33 +3574,93 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onSkip
     }, 2200);
   }
 
-  // Recomputes which scroll-dot is nearest the box's current scroll
-  // position. Called on scroll, and whenever the content driving the
-  // box's height changes (new message, reflection step, slide switch)
-  // since those can flip it between fitting and overflowing without the
-  // student ever scrolling.
-  function updateScrollDot() {
+  // Recomputes the floating rail thumb's size/position from the box's
+  // actual scroll metrics. Called on scroll, and whenever the content
+  // driving the box's height changes (new message, reflection step,
+  // slide switch) since those can flip it between fitting and overflowing
+  // without the student ever scrolling.
+  function updateScrollThumb() {
     const el = scrollRef.current;
     if (!el) return;
     const { scrollTop, scrollHeight, clientHeight } = el;
     if (scrollHeight <= clientHeight + 1) {
-      setScrollDotIndex(null);
+      setScrollThumb(null);
       return;
     }
+    const heightPct = Math.max(14, (clientHeight / scrollHeight) * 100);
     const maxScroll = scrollHeight - clientHeight;
-    const p = maxScroll > 0 ? scrollTop / maxScroll : 0;
-    setScrollDotIndex(Math.round(p * (SCROLL_DOT_COUNT - 1)));
+    const topPct = maxScroll > 0 ? (scrollTop / maxScroll) * (100 - heightPct) : 0;
+    setScrollThumb({ heightPct, topPct });
   }
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    updateScrollDot();
+    updateScrollThumb();
     // answersLocked/answersEnabled are included because the answer options
     // themselves don't mount until the lock clears (see appendCoachMessage)
     // -- without them, the box's real (taller, with options) height is
     // never re-measured, so a long options list can silently overflow
     // with the thumb still reporting "fits, nothing to scroll".
   }, [display, postPhase, transferData, activeSlide, answersLocked, answersEnabled]);
+
+  // Dragging the floating rail's thumb scrolls the card directly, rather
+  // than the thumb being a read-only reflection of scroll position --
+  // "functional, not decoration." Clicking the bare track (not the thumb)
+  // jumps straight to that position, matching how a real scrollbar track
+  // behaves.
+  function handleRailThumbPointerDown(e) {
+    const el = scrollRef.current;
+    const track = railTrackRef.current;
+    if (!el || !track) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setRailDragging(true);
+    railDragRef.current = {
+      startY: e.clientY,
+      startScrollTop: el.scrollTop,
+      trackHeight: track.clientHeight,
+      maxScroll: el.scrollHeight - el.clientHeight,
+    };
+    window.addEventListener("pointermove", handleRailPointerMove);
+    window.addEventListener("pointerup", handleRailPointerUp);
+  }
+
+  function handleRailPointerMove(e) {
+    const el = scrollRef.current;
+    const drag = railDragRef.current;
+    if (!el || !drag || drag.maxScroll <= 0) return;
+    const heightPct = Math.max(14, (el.clientHeight / el.scrollHeight) * 100);
+    const travelPx = drag.trackHeight * (1 - heightPct / 100);
+    const deltaY = e.clientY - drag.startY;
+    const scrollDelta = travelPx > 0 ? (deltaY / travelPx) * drag.maxScroll : 0;
+    el.scrollTop = Math.min(drag.maxScroll, Math.max(0, drag.startScrollTop + scrollDelta));
+  }
+
+  function handleRailPointerUp() {
+    railDragRef.current = null;
+    setRailDragging(false);
+    window.removeEventListener("pointermove", handleRailPointerMove);
+    window.removeEventListener("pointerup", handleRailPointerUp);
+  }
+
+  function handleRailTrackPointerDown(e) {
+    if (e.target !== railTrackRef.current) return; // the thumb has its own handler
+    const el = scrollRef.current;
+    const track = railTrackRef.current;
+    if (!el || !track) return;
+    const rect = track.getBoundingClientRect();
+    const clickFraction = (e.clientY - rect.top) / rect.height;
+    const maxScroll = el.scrollHeight - el.clientHeight;
+    el.scrollTop = Math.min(maxScroll, Math.max(0, clickFraction * maxScroll));
+  }
+
+  useEffect(() => {
+    return () => {
+      window.removeEventListener("pointermove", handleRailPointerMove);
+      window.removeEventListener("pointerup", handleRailPointerUp);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const slideGroups = groupMessagesByExchange(display);
   const isLatestSlide = activeSlide === slideGroups.length - 1;
@@ -4031,14 +4087,17 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onSkip
           {getReflectionAnnouncement() || [...display].reverse().find((m) => m.from === "coach")?.text || ""}
         </div>
 
-        {/* Single unified box */}
-        <div className="relative">
+        {/* Single unified box, with its floating scroll rail as a sibling
+            in the gap to its right rather than inset inside its own
+            padding -- see scrollThumb below. */}
+        <div className="flex items-stretch gap-3 sm:gap-5">
         <div
           ref={scrollRef}
-          onScroll={updateScrollDot}
+          id="coach-chat-scrollbox"
+          onScroll={updateScrollThumb}
           tabIndex={0}
           aria-label="Coach conversation"
-          className="coach-scrollbox overflow-y-auto bg-white p-5 sm:p-7 space-y-3"
+          className="coach-scrollbox overflow-y-auto bg-white p-5 sm:p-7 space-y-3 flex-1 min-w-0"
           style={{ ...CARD_GOLD, maxHeight: "calc(100dvh - 225px)" }}
         >
           {prePhase === "prior" && (
@@ -4440,15 +4499,23 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onSkip
             </>
           )}
         </div>
-        {scrollDotIndex !== null && (
-          <div aria-hidden="true" className="coach-scroll-dot-rail absolute right-2.5 top-4 bottom-4 pointer-events-none">
-            {Array.from({ length: SCROLL_DOT_COUNT }).map((_, i) => (
+        {scrollThumb && (
+          <div className="relative w-5 sm:w-7 shrink-0">
+            <div
+              ref={railTrackRef}
+              onPointerDown={handleRailTrackPointerDown}
+              className={`coach-rail-track absolute inset-y-3 inset-x-0${railDragging ? " dragging" : ""}`}
+            >
               <div
-                key={i}
-                className={`coach-scroll-dot${i === scrollDotIndex ? " active" : ""}`}
-                style={{ top: `${(i / (SCROLL_DOT_COUNT - 1)) * 100}%` }}
+                onPointerDown={handleRailThumbPointerDown}
+                className="coach-rail-thumb"
+                style={{ top: `${scrollThumb.topPct}%`, height: `${scrollThumb.heightPct}%` }}
+                role="scrollbar"
+                aria-orientation="vertical"
+                aria-controls="coach-chat-scrollbox"
+                aria-label="Scroll the coach conversation"
               />
-            ))}
+            </div>
           </div>
         )}
         </div>
