@@ -74,7 +74,7 @@ const FontImport = () => (
       .animate-pulse, .animate-bounce {
         animation: none !important;
       }
-      .answer-settle {
+      .answer-settle, .coach-scroll-dot {
         transition: none !important;
       }
     }
@@ -91,29 +91,41 @@ const FontImport = () => (
        default on trackpads/macOS) and stretch to fill the screen
        regardless of how little a given exchange actually contained,
        leaving a scroll affordance nobody could see and a lot of blank
-       card below short answers. overflow-y: scroll (not auto) keeps this
-       track permanently visible/reachable rather than only-on-hover, and
-       dropping the box's forced stretch (see coach-scrollbox usage
-       below) lets its height follow its content instead. */
+       card below short answers. Rather than a generic OS scrollbar
+       (hidden here in favour of the dot trail below), dropping the
+       box's forced stretch (see coach-scrollbox usage below) lets its
+       height follow its content instead. */
     .coach-scrollbox {
-      scrollbar-width: thin;
-      scrollbar-color: #f59e0b #fef3c7;
+      scrollbar-width: none;
     }
     .coach-scrollbox::-webkit-scrollbar {
-      width: 12px;
+      display: none;
     }
-    .coach-scrollbox::-webkit-scrollbar-track {
-      background: #fef3c7;
+    /* Scroll-position dots, deliberately styled to match the coach's
+       own "Stage 1 of 5" tracker (same teal/stone tokens, same dot
+       shape) rather than inventing a second visual language for "your
+       position in something" right next to the first one. */
+    .coach-scroll-dot-rail {
+      width: 2px;
+      background: #e7e5e4;
       border-radius: 999px;
-      margin: 4px 0;
     }
-    .coach-scrollbox::-webkit-scrollbar-thumb {
-      background: #f59e0b;
+    .coach-scroll-dot {
+      position: absolute;
+      left: 50%;
+      width: 13px;
+      height: 13px;
+      margin-left: -6.5px;
+      margin-top: -6.5px;
       border-radius: 999px;
-      border: 2px solid #fef3c7;
+      background: #fff;
+      border: 3px solid #d6d3d1;
+      transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
     }
-    .coach-scrollbox::-webkit-scrollbar-thumb:hover {
-      background: #d97706;
+    .coach-scroll-dot.active {
+      background: #0d9488;
+      border-color: #0f766e;
+      transform: scale(1.25);
     }
   `}</style>
 );
@@ -329,6 +341,8 @@ function CompassRose({ size = 220, spin = false, className = "", tone = "gold" }
 // plain containers (like the cross-cutting close-confirm modal) with no
 // audience of its own. Replaces the old deckle-edge/parchment DECKLE (and
 // KID_CARD) shape.
+// Number of dots in CoachScreen's scroll-position trail (see scrollDotIndex).
+const SCROLL_DOT_COUNT = 6;
 const CARD_SHADOW = "0 4px 16px rgba(0,0,0,0.08)";
 // Heavier static shadow for the one "main thing" card on a screen, so it
 // visibly outranks the routine cards around it (which keep CARD_SHADOW).
@@ -3384,10 +3398,14 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onSkip
   // Visible scroll-position indicator for the chat card, drawn ourselves
   // rather than relying on the OS scrollbar: real classrooms use a mix of
   // trackpads (auto-hiding scrollbar) and tablets (no scrollbar at all),
-  // so a student can easily miss that there's more to scroll to. null
+  // so a student can easily miss that there's more to scroll to. Styled as
+  // a vertical row of dots matching the "Stage 1 of 5" tracker above it,
+  // instead of a generic scrollbar, so the card doesn't speak two
+  // different visual languages for "your position in something." null
   // means the card's content currently fits without scrolling, so nothing
-  // is drawn.
-  const [scrollThumb, setScrollThumb] = useState(null);
+  // is drawn; otherwise it's the index of the dot nearest the current
+  // scroll position.
+  const [scrollDotIndex, setScrollDotIndex] = useState(null);
   const [showSettings, setShowSettings] = useState(false);
   // skipWord defers onWordResolved by 2.2s so the student has time to read
   // the reveal message. If they tap Back (or the parent otherwise unmounts
@@ -3560,28 +3578,27 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onSkip
     }, 2200);
   }
 
-  // Recomputes the custom scroll-thumb's size/position from the box's
-  // actual scroll metrics. Called on scroll, and whenever the content
-  // driving the box's height changes (new message, reflection step,
-  // slide switch) since those can flip it between fitting and overflowing
-  // without the student ever scrolling.
-  function updateScrollThumb() {
+  // Recomputes which scroll-dot is nearest the box's current scroll
+  // position. Called on scroll, and whenever the content driving the
+  // box's height changes (new message, reflection step, slide switch)
+  // since those can flip it between fitting and overflowing without the
+  // student ever scrolling.
+  function updateScrollDot() {
     const el = scrollRef.current;
     if (!el) return;
     const { scrollTop, scrollHeight, clientHeight } = el;
     if (scrollHeight <= clientHeight + 1) {
-      setScrollThumb(null);
+      setScrollDotIndex(null);
       return;
     }
-    const heightPct = Math.max(12, (clientHeight / scrollHeight) * 100);
     const maxScroll = scrollHeight - clientHeight;
-    const topPct = maxScroll > 0 ? (scrollTop / maxScroll) * (100 - heightPct) : 0;
-    setScrollThumb({ heightPct, topPct });
+    const p = maxScroll > 0 ? scrollTop / maxScroll : 0;
+    setScrollDotIndex(Math.round(p * (SCROLL_DOT_COUNT - 1)));
   }
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    updateScrollThumb();
+    updateScrollDot();
     // answersLocked/answersEnabled are included because the answer options
     // themselves don't mount until the lock clears (see appendCoachMessage)
     // -- without them, the box's real (taller, with options) height is
@@ -4018,10 +4035,10 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onSkip
         <div className="relative">
         <div
           ref={scrollRef}
-          onScroll={updateScrollThumb}
+          onScroll={updateScrollDot}
           tabIndex={0}
           aria-label="Coach conversation"
-          className="coach-scrollbox overflow-y-scroll bg-white p-5 sm:p-7 space-y-3"
+          className="coach-scrollbox overflow-y-auto bg-white p-5 sm:p-7 space-y-3"
           style={{ ...CARD_GOLD, maxHeight: "calc(100dvh - 225px)" }}
         >
           {prePhase === "prior" && (
@@ -4423,16 +4440,15 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onSkip
             </>
           )}
         </div>
-        {scrollThumb && (
-          <div
-            aria-hidden="true"
-            className="absolute right-1.5 top-2 bottom-2 w-1.5 rounded-full pointer-events-none"
-            style={{ background: "#fef3c7" }}
-          >
-            <div
-              className="absolute left-0 right-0 rounded-full transition-[top] duration-100"
-              style={{ background: "#f59e0b", top: `${scrollThumb.topPct}%`, height: `${scrollThumb.heightPct}%` }}
-            />
+        {scrollDotIndex !== null && (
+          <div aria-hidden="true" className="coach-scroll-dot-rail absolute right-2.5 top-4 bottom-4 pointer-events-none">
+            {Array.from({ length: SCROLL_DOT_COUNT }).map((_, i) => (
+              <div
+                key={i}
+                className={`coach-scroll-dot${i === scrollDotIndex ? " active" : ""}`}
+                style={{ top: `${(i / (SCROLL_DOT_COUNT - 1)) * 100}%` }}
+              />
+            ))}
           </div>
         )}
         </div>
