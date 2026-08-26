@@ -5341,14 +5341,18 @@ function computeClassPatternForStudent(roster, classes, student) {
   if (!student?.weakestClueType || !roster) return null;
   const classmates = roster.filter((s) => s.id !== student.id && s.weakestClueType?.type === student.weakestClueType.type);
   if (classmates.length === 0) return null;
-  const classSize = student.classId ? roster.filter((s) => s.classId === student.classId).length : roster.length;
+  const classScope = student.classId ? roster.filter((s) => s.classId === student.classId) : roster;
   const className = student.classId ? classes.find((c) => c.id === student.classId)?.name : null;
   return {
     type: student.weakestClueType.type,
     matchingCount: classmates.length + 1,
-    classSize,
+    classSize: classScope.length,
     className: className || "this roster",
     matchingNames: [student, ...classmates].map((s) => s.fullName),
+    // Every student the "counted across N" badge is actually counting,
+    // each with their OWN weakest clue type (not just the ones sharing
+    // this specific gap) -- click-to-reveal evidence behind that number.
+    classRoster: classScope.map((s) => ({ fullName: s.fullName, weakestClueType: s.weakestClueType || null })),
   };
 }
 
@@ -5357,17 +5361,32 @@ function computeClassPatternForStudent(roster, classes, student) {
 // from THIS session's own weakest clue type instead, same synthesis
 // philosophy as SKIP_REPORT_PROFILES below, so a live pitch can still show
 // off the flagship comparison card without needing real students.
-const DEMO_CLASSMATE_NAMES = ["Aisha", "Marcus", "Priya", "Wei Ling", "Farid"];
+const DEMO_CLASSMATE_NAMES = ["Aisha", "Marcus", "Priya", "Wei Ling", "Farid", "Danish", "Nur Iman", "Hafiz", "Sofia", "Kai Le", "Amirah"];
 function synthesizeDemoClassPattern(glance, studentId) {
   const weakest = weakestClueType(glance.breakdown, 1);
   if (!weakest) return null;
   const matchingCount = 3;
+  // classRoster mirrors the real computeClassPatternForStudent/classPatternFor
+  // shape (fullName + own weakestClueType) so the click-to-reveal panel on
+  // the Class Pattern badge works the same way in Demo Mode too -- the
+  // first matchingCount entries share this exact gap, the rest of the
+  // synthetic class has its own varied (or as-yet-absent) weakest type.
+  const otherTypes = CLUE_TYPE_INFO.map((c) => c.type).filter((t) => t !== weakest.type);
+  const classRoster = [
+    { fullName: studentId, weakestClueType: { type: weakest.type, independent: weakest.independent, total: weakest.total } },
+    ...DEMO_CLASSMATE_NAMES.map((name, i) =>
+      i < matchingCount - 1
+        ? { fullName: name, weakestClueType: { type: weakest.type, independent: weakest.independent, total: weakest.total } }
+        : { fullName: name, weakestClueType: { type: otherTypes[i % otherTypes.length], independent: 1, total: 2 + (i % 3) } }
+    ),
+  ];
   return {
     type: weakest.type,
     matchingCount,
-    classSize: 12,
+    classSize: classRoster.length,
     className: "this class",
     matchingNames: [studentId, ...DEMO_CLASSMATE_NAMES.slice(0, matchingCount - 1)],
+    classRoster,
   };
 }
 
@@ -5573,6 +5592,14 @@ const SAMPLE_CLASS_PATTERN = {
   classSize: 3,
   className: "4A",
   matchingNames: ["Sample Student", "Aisha", "Marcus"],
+  // Matches SAMPLE_ROSTER's own weakestClueType values below exactly, so
+  // the click-to-reveal panel never disagrees with the roster it's drawn
+  // from.
+  classRoster: [
+    { fullName: "Sample Student", weakestClueType: { type: "definition", independent: 1, total: 3 } },
+    { fullName: "Aisha", weakestClueType: { type: "definition", independent: 1, total: 3 } },
+    { fullName: "Marcus", weakestClueType: { type: "definition", independent: 0, total: 2 } },
+  ],
 };
 
 // Everything below (SAMPLE_STUDENT_STATS/PAST_SESSIONS/WORD_HISTORY/
@@ -5616,13 +5643,19 @@ const SAMPLE_PAST_SESSIONS = [
     startedAt: new Date(Date.now() - 7 * ONE_DAY_MS).toISOString(),
     finishedAt: new Date(Date.now() - 7 * ONE_DAY_MS + 900000).toISOString(),
     comprehensionCorrect: true,
-    teacherNotes: null,
+    // Kept identical to _demoExistingNotes below on purpose -- in the real
+    // app both come from the exact same DB column (sessions.teacher_notes),
+    // read two different ways (this one for File Box's/History's session
+    // list, that one to prefill the live report's editable follow-up box),
+    // so a sample fixture with two different values would demonstrate a
+    // parity bug that doesn't actually exist in the real data.
+    teacherNotes: "Tried a quick group activity on spotting indirect clues after this session — noticeably faster the next time.",
     independentCount: 4,
     totalCount: 5,
     _demoLog: SAMPLE_PAST_SESSION_2_LOG,
     _demoDiagnosticReport: SAMPLE_PAST_SESSION_2_SUMMARY,
     _demoWhatToTry: SAMPLE_PAST_SESSION_2_SUMMARY.whatToTry,
-    _demoExistingNotes: "",
+    _demoExistingNotes: "Tried a quick group activity on spotting indirect clues after this session — noticeably faster the next time.",
   },
   {
     id: "sample-session-1",
@@ -6296,6 +6329,16 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
   const [error, setError] = useState(null);
   const [showHelp, setShowHelp] = useState(false);
   const [showFullDetails, setShowFullDetails] = useState(false);
+  // Class Pattern's "counted across N students" badge is click-to-reveal:
+  // the badge names a count, not who's actually in it, so a teacher has no
+  // way to check it without opening File Box separately. Toggling this
+  // shows every student in that same scope (classRoster, attached to the
+  // classPattern object itself -- see computeClassPatternForStudent/
+  // classPatternFor/synthesizeDemoClassPattern), each with their OWN
+  // weakest clue type, not just the ones who share this specific gap --
+  // the fuller picture, matching how every other count in this report is
+  // already backed by real, inspectable evidence.
+  const [showClassRoster, setShowClassRoster] = useState(false);
   const [downloading, setDownloading] = useState(false);
   // Cross-session pattern, growth-vs-history, word-retention (item 1),
   // metacognitive calibration (item 9), and the "recommended next words"
@@ -6744,11 +6787,40 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
           {effectiveClassPattern && (
             <div className="p-5 rounded-3xl step-in" style={{ background: "linear-gradient(135deg,#eff6ff,#dbeafe)", border: "3px solid #2563eb", boxShadow: "0 3px 0 0 #1d4ed8" }}>
               <p className="font-display font-800 text-xs uppercase tracking-wide text-blue-800 mb-2">
-                🏫 Class Pattern <span className="ml-1 font-body font-800 text-[10px] normal-case tracking-normal text-white bg-blue-600 rounded-full px-2 py-0.5">counted across {effectiveClassPattern.classSize} students</span>
+                🏫 Class Pattern{" "}
+                {effectiveClassPattern.classRoster ? (
+                  <button
+                    type="button"
+                    onClick={() => { SFX.tap(); setShowClassRoster((s) => !s); }}
+                    className="ml-1 font-body font-800 text-[10px] normal-case tracking-normal text-white bg-blue-600 hover:bg-blue-700 rounded-full px-2 py-0.5 underline decoration-dotted underline-offset-2"
+                    aria-expanded={showClassRoster}
+                  >
+                    counted across {effectiveClassPattern.classSize} students {showClassRoster ? "▲" : "▼"}
+                  </button>
+                ) : (
+                  <span className="ml-1 font-body font-800 text-[10px] normal-case tracking-normal text-white bg-blue-600 rounded-full px-2 py-0.5">counted across {effectiveClassPattern.classSize} students</span>
+                )}
               </p>
               <p className="font-body text-sm text-blue-900 leading-relaxed">
                 <b>{effectiveClassPattern.matchingCount} students</b> in {effectiveClassPattern.className} share this same gap — struggling specifically with <b className="capitalize">{effectiveClassPattern.type}</b>-clue words: {effectiveClassPattern.matchingNames.join(", ")}.
               </p>
+              {showClassRoster && effectiveClassPattern.classRoster && (
+                <div className="mt-3 p-3 rounded-2xl bg-white step-in" style={{ border: "2px solid #93c5fd" }}>
+                  <p className="font-display font-800 text-[11px] uppercase tracking-wide text-blue-700 mb-2">Everyone counted in this {effectiveClassPattern.classSize}</p>
+                  <div className="space-y-1">
+                    {effectiveClassPattern.classRoster.map((s, i) => (
+                      <div key={i} className="flex items-center justify-between gap-2 text-xs font-body text-blue-900">
+                        <span className="font-700">{s.fullName}</span>
+                        <span className="text-blue-600">
+                          {s.weakestClueType
+                            ? <>weakest: <b className="capitalize">{s.weakestClueType.type}</b> ({s.weakestClueType.independent}/{s.weakestClueType.total})</>
+                            : <i>not enough data yet</i>}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
               <p className="font-body text-[11px] text-blue-600 mt-2">🔢 Counted directly from each student's logged history, not AI</p>
               {onCreateTargetedPassage && (
                 <button
@@ -7012,6 +7084,13 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
                               {new Date(s.finishedAt).toLocaleDateString()} · {s.wordCount} word{s.wordCount === 1 ? "" : "s"}
                               {s.comprehensionCorrect !== null ? ` · comprehension ${s.comprehensionCorrect ? "✓" : "✗"}` : ""}
                             </p>
+                            {/* Same follow-up note FileBoxScreen's own session
+                                list already shows -- this History card is
+                                the OTHER place a teacher browses past
+                                sessions, so it shouldn't be the one place
+                                that goes silent on whether a suggestion
+                                actually got tried. */}
+                            {s.teacherNotes && <p className="font-body text-xs text-violet-600 mt-0.5 truncate">📝 {s.teacherNotes}</p>}
                           </div>
                           <ChevronRight className="w-4 h-4 text-indigo-400 shrink-0" />
                         </button>
@@ -7482,16 +7561,15 @@ function FileBoxScreen({ onBack, onCreateTargetedPassage }) {
     const group = sharedClueGroups[student.weakestClueType.type] || [];
     const classmates = group.filter((s) => s.id !== student.id);
     if (classmates.length === 0) return null;
-    const classSize = student.classId
-      ? roster.filter((s) => s.classId === student.classId).length
-      : roster.length;
+    const classScope = student.classId ? roster.filter((s) => s.classId === student.classId) : roster;
     const className = student.classId ? classes.find((c) => c.id === student.classId)?.name : null;
     return {
       type: student.weakestClueType.type,
       matchingCount: classmates.length + 1,
-      classSize,
+      classSize: classScope.length,
       className: className || "this roster",
       matchingNames: [student, ...classmates].map((s) => s.fullName),
+      classRoster: classScope.map((s) => ({ fullName: s.fullName, weakestClueType: s.weakestClueType || null })),
     };
   }
 
