@@ -70,12 +70,25 @@ export function isOriginAllowed(req) {
 // trusted directly, anyone can send a fake value and rotate it per
 // request to defeat IP-keyed rate limiting / brute-force guards. On
 // Vercel, ipAddress() reads "x-real-ip", which is set by Vercel's own
-// edge network and can't be spoofed by the client. req.ip is the
-// fallback for the Express path (server.js), which requires
-// `app.set("trust proxy", ...)` (see server.js) so Express resolves the
-// real client IP from its trusted proxy hop instead of raw client input.
+// edge network and can't be spoofed by the client — but ipAddress() has
+// no way to know whether it's actually running on Vercel, it just reads
+// whatever "x-real-ip" says. process.env.VERCEL is set on every Vercel
+// deployment (serverless and edge alike), so gate the header-based lookup
+// on that rather than trusting it unconditionally: on the server.js path
+// (Cloud Run, a bare VPS, anywhere else), nothing strips a
+// client-supplied "x-real-ip" header, so trusting it there would let any
+// client fake their IP and fully bypass both TRUST_PROXY_HOPS below and
+// every IP-keyed rate limiter/brute-force guard in this app — silently
+// defeating the exact attack TRUST_PROXY_HOPS was added to close. Off
+// Vercel, req.ip is the real source of truth, resolved by Express from
+// its trusted proxy hop via `app.set("trust proxy", ...)` (see server.js),
+// never from raw client-controlled headers.
 export function getClientIp(req) {
-  return ipAddress(new Headers(req.headers)) || req.ip || req.socket?.remoteAddress || "unknown";
+  if (process.env.VERCEL) {
+    const fromVercelEdge = ipAddress(new Headers(req.headers));
+    if (fromVercelEdge) return fromVercelEdge;
+  }
+  return req.ip || req.socket?.remoteAddress || "unknown";
 }
 
 // Opportunistically evicts expired entries from an in-memory rate-limit

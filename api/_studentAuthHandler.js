@@ -110,6 +110,14 @@ export default async function studentAuthHandler(req, res) {
       .select("id, full_name, avatar_config")
       .single();
     if (insertError || !created) {
+      // 23505 = Postgres unique_violation: two signups for the same name
+      // both passed the `existing` check above before either inserted (a
+      // narrow but real race, e.g. a student double-tapping "Continue" on
+      // a slow connection). Report it the same way as the non-race
+      // duplicate above, rather than a generic/misleading 502.
+      if (insertError?.code === "23505") {
+        return res.status(409).json({ error: "That name is already registered. Try Returning Student instead." });
+      }
       return res.status(502).json({ error: "Couldn't create the account, please try again" });
     }
 

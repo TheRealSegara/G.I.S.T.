@@ -61,7 +61,7 @@ app.post("/api/student-auth", (req, res) => {
   const authHeader = req.headers["authorization"] || "";
   const teacherToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
   const claims = verifyToken(teacherToken, SECRET);
-  if (!claims) return res.status(401).json({ error: "Missing or expired access token", tokenInvalid: true });
+  if (!claims || claims.kind === "student") return res.status(401).json({ error: "Missing or expired access token", tokenInvalid: true });
 
   const { mode, fullName, avatarConfig } = req.body || {};
   const nameKey = (fullName || "").trim().toLowerCase();
@@ -91,11 +91,36 @@ app.post("/api/student-auth", (req, res) => {
   return res.status(400).json({ error: "Invalid mode" });
 });
 
-app.post("/api/session", (req, res) => {
+// Shared by all four /api/session methods below, mirroring the real
+// handler's split: a missing/expired token is always 401+tokenInvalid
+// (what the client's re-auth overlay keys off of), a valid-but-wrong-kind
+// token is a separate 403 with no tokenInvalid flag.
+function requireSessionAuth(req, res) {
   const authHeader = req.headers["authorization"] || "";
   const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
   const claims = verifyToken(token, SECRET);
-  if (!claims || claims.kind !== "student") return res.status(403).json({ error: "Only a student session can save progress" });
+  if (!claims) {
+    res.status(401).json({ error: "Missing or expired access token", tokenInvalid: true });
+    return null;
+  }
+  return claims;
+}
+
+// Ownership check mirroring the real handler's `students!inner` join +
+// access_code_label comparison: a session UUID guessed/leaked from another
+// school's demo run should reveal nothing, same as production.
+function findOwnedSession(sessionId, label) {
+  const session = sessions.find((s) => s.id === sessionId);
+  if (!session) return null;
+  const student = students.find((s) => s.id === session.studentId);
+  if (!student || student.label !== label) return null;
+  return { session, student };
+}
+
+app.post("/api/session", (req, res) => {
+  const claims = requireSessionAuth(req, res);
+  if (!claims) return;
+  if (claims.kind !== "student") return res.status(403).json({ error: "Only a student session can save progress" });
   const { passageTitle, passageEmoji, startedAt, finishedAt, comprehensionResult, log } = req.body || {};
   const session = { id: String(nextSessionId++), studentId: claims.studentId, passageTitle, passageEmoji, startedAt, finishedAt, comprehensionResult, diagnosticReport: null, log, teacherNotes: null, flaggedWords: [] };
   sessions.push(session);
@@ -103,13 +128,12 @@ app.post("/api/session", (req, res) => {
 });
 
 app.get("/api/session", (req, res) => {
-  const authHeader = req.headers["authorization"] || "";
-  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
-  const claims = verifyToken(token, SECRET);
-  if (!claims || claims.kind === "student") return res.status(403).json({ error: "Teacher access required" });
-  const session = sessions.find((s) => s.id === req.query.sessionId);
-  if (!session) return res.status(404).json({ error: "Session not found" });
-  const student = students.find((s) => s.id === session.studentId);
+  const claims = requireSessionAuth(req, res);
+  if (!claims) return;
+  if (claims.kind === "student") return res.status(403).json({ error: "Teacher access required" });
+  const found = findOwnedSession(req.query.sessionId, claims.label);
+  if (!found) return res.status(404).json({ error: "Session not found" });
+  const { session, student } = found;
   return res.status(200).json({
     session: { id: session.id, studentId: session.studentId, studentName: student?.fullName || "Student", passageTitle: session.passageTitle, passageEmoji: session.passageEmoji, startedAt: session.startedAt, finishedAt: session.finishedAt, comprehensionResult: session.comprehensionResult, diagnosticReport: session.diagnosticReport, teacherNotes: session.teacherNotes, flaggedWords: session.flaggedWords || [] },
     log: session.log || [],
@@ -117,12 +141,12 @@ app.get("/api/session", (req, res) => {
 });
 
 app.patch("/api/session", (req, res) => {
-  const authHeader = req.headers["authorization"] || "";
-  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
-  const claims = verifyToken(token, SECRET);
-  if (!claims || claims.kind === "student") return res.status(403).json({ error: "Teacher access required" });
-  const session = sessions.find((s) => s.id === req.body.sessionId);
-  if (!session) return res.status(404).json({ error: "Session not found" });
+  const claims = requireSessionAuth(req, res);
+  if (!claims) return;
+  if (claims.kind === "student") return res.status(403).json({ error: "Teacher access required" });
+  const found = findOwnedSession(req.body.sessionId, claims.label);
+  if (!found) return res.status(404).json({ error: "Session not found" });
+  const { session } = found;
   if (req.body.diagnosticReport !== undefined) session.diagnosticReport = req.body.diagnosticReport;
   if (req.body.teacherNotes !== undefined) session.teacherNotes = req.body.teacherNotes;
   if (req.body.flaggedWords !== undefined) session.flaggedWords = req.body.flaggedWords;
@@ -130,12 +154,12 @@ app.patch("/api/session", (req, res) => {
 });
 
 app.delete("/api/session", (req, res) => {
-  const authHeader = req.headers["authorization"] || "";
-  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
-  const claims = verifyToken(token, SECRET);
-  if (!claims || claims.kind === "student") return res.status(403).json({ error: "Teacher access required" });
-  const idx = sessions.findIndex((s) => s.id === req.query.sessionId);
-  if (idx === -1) return res.status(404).json({ error: "Session not found" });
+  const claims = requireSessionAuth(req, res);
+  if (!claims) return;
+  if (claims.kind === "student") return res.status(403).json({ error: "Teacher access required" });
+  const found = findOwnedSession(req.query.sessionId, claims.label);
+  if (!found) return res.status(404).json({ error: "Session not found" });
+  const idx = sessions.findIndex((s) => s.id === found.session.id);
   sessions.splice(idx, 1);
   return res.status(200).json({ ok: true });
 });

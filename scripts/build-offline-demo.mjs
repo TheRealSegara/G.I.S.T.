@@ -122,6 +122,17 @@ const mockScript = String.raw`
     return readToken(token);
   }
 
+  // Ownership check mirroring the real handler's `students!inner` join +
+  // access_code_label comparison: a session UUID guessed/leaked from
+  // another school's demo run should reveal nothing, same as production.
+  function findOwnedSession(sessionId, label) {
+    var session = sessions.find(function (s) { return s.id === sessionId; });
+    if (!session) return null;
+    var student = students.find(function (s) { return s.id === session.studentId; });
+    if (!student || student.label !== label) return null;
+    return { session: session, student: student };
+  }
+
   var realFetch = window.fetch.bind(window);
 
   window.fetch = function (input, init) {
@@ -161,7 +172,7 @@ const mockScript = String.raw`
 
         if (pathname === "/api/student-auth" && method === "POST") {
           var claims2 = getClaims(headersInit);
-          if (!claims2) { resolve(jsonResponse(401, { error: "Missing or expired access token", tokenInvalid: true })); return; }
+          if (!claims2 || claims2.kind === "student") { resolve(jsonResponse(401, { error: "Missing or expired access token", tokenInvalid: true })); return; }
           var mode = body.mode, fullName = body.fullName, avatarConfig = body.avatarConfig;
           var nameKey = (fullName || "").trim().toLowerCase();
           if (mode === "signup") {
@@ -189,7 +200,8 @@ const mockScript = String.raw`
 
         if (pathname === "/api/session" && method === "POST") {
           var claims3 = getClaims(headersInit);
-          if (!claims3 || claims3.kind !== "student") { resolve(jsonResponse(403, { error: "Only a student session can save progress" })); return; }
+          if (!claims3) { resolve(jsonResponse(401, { error: "Missing or expired access token", tokenInvalid: true })); return; }
+          if (claims3.kind !== "student") { resolve(jsonResponse(403, { error: "Only a student session can save progress" })); return; }
           var session = { id: String(nextSessionId++), studentId: claims3.studentId, passageTitle: body.passageTitle, passageEmoji: body.passageEmoji, startedAt: body.startedAt, finishedAt: body.finishedAt, comprehensionResult: body.comprehensionResult, diagnosticReport: null, log: body.log, teacherNotes: null, flaggedWords: [] };
           sessions.push(session);
           resolve(jsonResponse(200, { ok: true, sessionId: session.id }));
@@ -198,11 +210,12 @@ const mockScript = String.raw`
 
         if (pathname === "/api/session" && method === "GET") {
           var claims4 = getClaims(headersInit);
-          if (!claims4 || claims4.kind === "student") { resolve(jsonResponse(403, { error: "Teacher access required" })); return; }
+          if (!claims4) { resolve(jsonResponse(401, { error: "Missing or expired access token", tokenInvalid: true })); return; }
+          if (claims4.kind === "student") { resolve(jsonResponse(403, { error: "Teacher access required" })); return; }
           var sessionId = u.searchParams.get("sessionId");
-          var session2 = sessions.find(function (s) { return s.id === sessionId; });
-          if (!session2) { resolve(jsonResponse(404, { error: "Session not found" })); return; }
-          var studentForSession = students.find(function (s) { return s.id === session2.studentId; });
+          var found4 = findOwnedSession(sessionId, claims4.label);
+          if (!found4) { resolve(jsonResponse(404, { error: "Session not found" })); return; }
+          var session2 = found4.session, studentForSession = found4.student;
           resolve(jsonResponse(200, {
             session: { id: session2.id, studentId: session2.studentId, studentName: (studentForSession && studentForSession.fullName) || "Student", passageTitle: session2.passageTitle, passageEmoji: session2.passageEmoji, startedAt: session2.startedAt, finishedAt: session2.finishedAt, comprehensionResult: session2.comprehensionResult, diagnosticReport: session2.diagnosticReport, teacherNotes: session2.teacherNotes, flaggedWords: session2.flaggedWords || [] },
             log: session2.log || []
@@ -212,9 +225,11 @@ const mockScript = String.raw`
 
         if (pathname === "/api/session" && method === "PATCH") {
           var claims5 = getClaims(headersInit);
-          if (!claims5 || claims5.kind === "student") { resolve(jsonResponse(403, { error: "Teacher access required" })); return; }
-          var session3 = sessions.find(function (s) { return s.id === body.sessionId; });
-          if (!session3) { resolve(jsonResponse(404, { error: "Session not found" })); return; }
+          if (!claims5) { resolve(jsonResponse(401, { error: "Missing or expired access token", tokenInvalid: true })); return; }
+          if (claims5.kind === "student") { resolve(jsonResponse(403, { error: "Teacher access required" })); return; }
+          var found5 = findOwnedSession(body.sessionId, claims5.label);
+          if (!found5) { resolve(jsonResponse(404, { error: "Session not found" })); return; }
+          var session3 = found5.session;
           if (body.diagnosticReport !== undefined) session3.diagnosticReport = body.diagnosticReport;
           if (body.teacherNotes !== undefined) session3.teacherNotes = body.teacherNotes;
           if (body.flaggedWords !== undefined) session3.flaggedWords = body.flaggedWords;
@@ -224,10 +239,12 @@ const mockScript = String.raw`
 
         if (pathname === "/api/session" && method === "DELETE") {
           var claims6 = getClaims(headersInit);
-          if (!claims6 || claims6.kind === "student") { resolve(jsonResponse(403, { error: "Teacher access required" })); return; }
+          if (!claims6) { resolve(jsonResponse(401, { error: "Missing or expired access token", tokenInvalid: true })); return; }
+          if (claims6.kind === "student") { resolve(jsonResponse(403, { error: "Teacher access required" })); return; }
           var delSessionId = u.searchParams.get("sessionId");
-          var idx1 = sessions.findIndex(function (s) { return s.id === delSessionId; });
-          if (idx1 === -1) { resolve(jsonResponse(404, { error: "Session not found" })); return; }
+          var found6 = findOwnedSession(delSessionId, claims6.label);
+          if (!found6) { resolve(jsonResponse(404, { error: "Session not found" })); return; }
+          var idx1 = sessions.findIndex(function (s) { return s.id === found6.session.id; });
           sessions.splice(idx1, 1);
           resolve(jsonResponse(200, { ok: true }));
           return;

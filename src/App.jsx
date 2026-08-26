@@ -5298,9 +5298,15 @@ function weakestClueType(breakdown, minTotal = 2) {
 // student share their weakest-clue-type gap with any OTHER student."
 function computeClassPatternForStudent(roster, classes, student) {
   if (!student?.weakestClueType || !roster) return null;
-  const classmates = roster.filter((s) => s.id !== student.id && s.weakestClueType?.type === student.weakestClueType.type);
-  if (classmates.length === 0) return null;
+  // Scope classmates to the SAME class as student first, then look for a
+  // shared weakest-clue-type within that scope -- filtering the whole
+  // roster here (before narrowing to classScope) would let a student from
+  // a different class get counted/named as a "classmate" in a multi-class
+  // roster, even though the click-to-reveal panel below is correctly
+  // scoped, producing two different, disagreeing sets for the same card.
   const classScope = student.classId ? roster.filter((s) => s.classId === student.classId) : roster;
+  const classmates = classScope.filter((s) => s.id !== student.id && s.weakestClueType?.type === student.weakestClueType.type);
+  if (classmates.length === 0) return null;
   const className = student.classId ? classes.find((c) => c.id === student.classId)?.name : null;
   return {
     type: student.weakestClueType.type,
@@ -6476,8 +6482,11 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
   async function toggleWordFlag(word) {
     SFX.tap();
     const key = word.toLowerCase();
-    const next = flaggedWords.includes(key) ? flaggedWords.filter((w) => w !== key) : [...flaggedWords, key];
-    setFlaggedWords(next);
+    let next;
+    setFlaggedWords((prev) => {
+      next = prev.includes(key) ? prev.filter((w) => w !== key) : [...prev, key];
+      return next;
+    });
     // Sample report: sessionId is a fake id with no real row to PATCH, and
     // a live Demo Mode session never gets a real sessionId in the first
     // place (nothing is saved) -- either way this stays a local-only
@@ -7332,8 +7341,9 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
                         type="button"
                         onClick={() => toggleWordFlag(entry.word)}
                         aria-pressed={flaggedWords.includes(entry.word.toLowerCase())}
+                        aria-label={flaggedWords.includes(entry.word.toLowerCase()) ? `Flagged for re-teaching -- tap to unflag "${entry.word}"` : `Flag "${entry.word}" for re-teaching`}
                         title={flaggedWords.includes(entry.word.toLowerCase()) ? "Flagged for re-teaching -- tap to unflag" : "Flag for re-teaching"}
-                        className={`text-lg leading-none rounded-full w-8 h-8 flex items-center justify-center transition-colors ${
+                        className={`text-lg leading-none rounded-full w-11 h-11 flex items-center justify-center transition-colors ${
                           flaggedWords.includes(entry.word.toLowerCase()) ? "bg-rose-100" : "opacity-30 hover:opacity-70"
                         }`}
                       >
@@ -7747,10 +7757,16 @@ function FileBoxScreen({ onBack, onCreateTargetedPassage }) {
   // student's own pattern again, already shown elsewhere in their report.
   function classPatternFor(student) {
     if (!student?.weakestClueType || !roster) return null;
-    const group = sharedClueGroups[student.weakestClueType.type] || [];
-    const classmates = group.filter((s) => s.id !== student.id);
-    if (classmates.length === 0) return null;
+    // sharedClueGroups is precomputed across the WHOLE roster (it also
+    // feeds the separate cross-class "Shared Patterns" rollup elsewhere),
+    // so narrow it to this student's own class scope before counting
+    // classmates here -- otherwise a student from a different class could
+    // get counted/named in this card while the click-to-reveal panel below
+    // (already scoped to classScope) shows a different, disagreeing set.
     const classScope = student.classId ? roster.filter((s) => s.classId === student.classId) : roster;
+    const group = sharedClueGroups[student.weakestClueType.type] || [];
+    const classmates = group.filter((s) => s.id !== student.id && classScope.includes(s));
+    if (classmates.length === 0) return null;
     const className = student.classId ? classes.find((c) => c.id === student.classId)?.name : null;
     return {
       type: student.weakestClueType.type,
