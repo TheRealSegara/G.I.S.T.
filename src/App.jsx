@@ -3937,7 +3937,19 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onSkip
     if (isCorrect === null && current.input_type === "text" && !textLikelyContainsWord(answerText, targetWord.word)) {
       factNote += `\n[FACT: the answer does not contain the target word "${targetWord.word}" in any form.]`;
     }
-    const newHistory = [...history, { role: "user", content: answerText + factNote }];
+    // Hint escalation: exchangeCountRef.current is how many prior turns on
+    // THIS word already got a hint without resolving it (see the stuck-limit
+    // check below) -- tell the coach so a second or third hint on the same
+    // word gets noticeably more specific instead of just repeating the
+    // first one in different words. Omitted on the very first attempt
+    // (nothing to escalate from yet). mockClaude reads this exact same note
+    // to drive the same escalation in Demo Mode, see shared/prompts.js for
+    // how the real coach is instructed to use it.
+    const escalationNote =
+      exchangeCountRef.current > 0
+        ? `\n[HINT ESCALATION: this word has already had ${exchangeCountRef.current} hint(s) that didn't help. If you give a hint this turn, make it noticeably more specific than your last one, while still never stating the word's meaning directly.]`
+        : "";
+    const newHistory = [...history, { role: "user", content: answerText + factNote + escalationNote }];
     try {
       const parsed = await callClaudeWithRetry("coach", { companionId: avatarConfig.companion, stage1Type, stage2Type, stage3Type }, newHistory, MAX_RETRY_ATTEMPTS, (p) => validateCoachResponse(p, targetWord.word, passage.text));
       const updatedHistory = [...newHistory, { role: "assistant", content: JSON.stringify(parsed) }];

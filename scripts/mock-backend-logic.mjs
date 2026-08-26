@@ -359,6 +359,27 @@ function buildContextualHint(word, allMsgs) {
   return "Think about how \"" + word + "\" is used here.";
 }
 
+// Mirrors the real coach's "Hint escalation" rule in shared/prompts.js:
+// the first hint for a word stays exactly as it is today (a curated or
+// generated pointer to WHERE the clue is, never the meaning itself); if
+// that doesn't land, later hints get progressively more pointed. Returns
+// a full REPLACEMENT for escalated levels, never an append onto baseHint
+// -- appending a whole extra quoted sentence was tried first and blew
+// past the app's own MESSAGE_MAX_SENTENCES/MESSAGE_MAX_WORDS_PER_SENTENCE
+// validator (src/App.jsx's validateCoachResponse, the same cap the real
+// coach's own LANGUAGE RULES impose), since several curated hints are
+// already close to that 12-word ceiling on their own with zero room left
+// to add a second clause. Each escalated tier below is a single short,
+// fixed sentence instead, guaranteed to fit regardless of how long the
+// underlying curated hint or passage sentence is. priorHintCount is how
+// many hints this same word already got before this turn (0 on the very
+// first wrong answer).
+function escalatedHint(baseHint, word, priorHintCount) {
+  if (priorHintCount <= 0) return baseHint;
+  if (priorHintCount === 1) return "Look very closely at the word \"" + word + "\" in that sentence.";
+  return "Read every word around \"" + word + "\"; it tells you exactly what you need.";
+}
+
 /* ---------------- diagnostic report templates ---------------- */
 const SUMMARY_STRUGGLED_TEMPLATES = [
   function (n) { return "Solid grasp of most words; " + n + " needed extra support and should be revisited."; },
@@ -560,6 +581,14 @@ function mockClaude(promptId, messages, params) {
     const missingWordFact = /\[FACT: the answer does not contain the target word/.test(lastMsg);
     const accepted = priorInputType === "text" ? !missingWordFact : wasCorrect;
 
+    // The real frontend embeds this exact note (see submitAnswer in
+    // src/App.jsx) whenever this word already got a hint that didn't help
+    // -- reading the count straight out of it keeps Demo Mode's escalation
+    // driven by the same signal the real AI sees, instead of a second,
+    // possibly-drifting recomputation from the message history here.
+    const hintEscalationMatch = /\[HINT ESCALATION: this word has already had (\d+) hint/.exec(lastMsg);
+    const priorHintCount = hintEscalationMatch ? parseInt(hintEscalationMatch[1], 10) : 0;
+
     // Progression: a brand new word always starts at Stage 1; a correct
     // answer advances exactly one stage at a time (so a full playthrough
     // demonstrates every mechanic, not just some of them); an incorrect
@@ -581,10 +610,11 @@ function mockClaude(promptId, messages, params) {
       }
     }
 
-    const hintText = (w && w.hint) || buildContextualHint(word, allMsgs);
     const passageText = extractPassageText(allMsgs);
     let groundedSentence = getSentenceContaining(passageText, word);
     groundedSentence = (groundedSentence && groundedSentence.trim()) || ("The passage uses \"" + word + "\" — read the sentence carefully.");
+    const baseHintText = (w && w.hint) || buildContextualHint(word, allMsgs);
+    const hintText = escalatedHint(baseHintText, word, priorHintCount);
 
     // Stage 1: MCQ. Uses the word's own curated meaning/distractors when
     // available; otherwise borrows another known word's shape (a
@@ -618,7 +648,7 @@ function mockClaude(promptId, messages, params) {
     // on the same mechanic.
     if (stage === 2) {
       const inputType = (params && STAGE2_TYPES.indexOf(params.stage2Type) !== -1) ? params.stage2Type : (word.charCodeAt(0) % 2 === 0 ? "word_bank" : "letter_connect");
-      const message = hintGiven ? "Not quite, try spelling it again!" : pickOne(ADVANCE_TEMPLATES)(word);
+      const message = hintGiven ? "Not quite, try spelling it again! " + hintText : pickOne(ADVANCE_TEMPLATES)(word);
       return { message: message, display_sentence: groundedSentence, input_type: inputType, options: null, word_tiles: shuffleLetters(word), correct_answer: null, sentence_starter: null, stage: 2, grading_reasoning: null, hint_given: hintGiven, resolved: false, fun_fact: null };
     }
 
@@ -634,7 +664,7 @@ function mockClaude(promptId, messages, params) {
       const inputType = (params && STAGE3_TYPES.indexOf(params.stage3Type) !== -1) ? params.stage3Type : (word.length % 2 === 0 ? "tap_select" : "reverse_clue");
       if (inputType === "tap_select") {
         const group = oddOneOutFor(word);
-        const message = hintGiven ? "Not quite, think about what it means!" : "Which word doesn't belong?";
+        const message = hintGiven ? "Not quite, think about what it means! " + hintText : "Which word doesn't belong?";
         const options = [word].concat(group.belongs, [group.odd]).sort(function () { return Math.random() - 0.5; });
         return { message: message, display_sentence: groundedSentence, input_type: "tap_select", options: options, word_tiles: null, correct_answer: group.odd, sentence_starter: null, stage: 3, grading_reasoning: null, hint_given: hintGiven, resolved: false, fun_fact: null };
       }
@@ -650,14 +680,14 @@ function mockClaude(promptId, messages, params) {
         const picked = otherSentences.slice(0, 3);
         const correctSentence = picked[0];
         const options = picked.slice().sort(function () { return Math.random() - 0.5; });
-        const message = hintGiven ? "Not quite, think back through the story!" : "Which sentence explains why?";
+        const message = hintGiven ? "Not quite, think back through the story! " + hintText : "Which sentence explains why?";
         return { message: message, display_sentence: groundedSentence, input_type: "reverse_clue", options: options, word_tiles: null, correct_answer: correctSentence, sentence_starter: null, stage: 3, grading_reasoning: null, hint_given: hintGiven, resolved: false, fun_fact: null };
       }
       // Passage too short to offer 3 genuine OTHER sentences (shouldn't
       // happen for a real 80-150 word passage) -- fall back to tap_select,
       // which has no such requirement.
       const fallbackGroup = oddOneOutFor(word);
-      const fallbackMessage = hintGiven ? "Not quite, think about what it means!" : "Which word doesn't belong?";
+      const fallbackMessage = hintGiven ? "Not quite, think about what it means! " + hintText : "Which word doesn't belong?";
       const fallbackOptions = [word].concat(fallbackGroup.belongs, [fallbackGroup.odd]).sort(function () { return Math.random() - 0.5; });
       return { message: fallbackMessage, display_sentence: groundedSentence, input_type: "tap_select", options: fallbackOptions, word_tiles: null, correct_answer: fallbackGroup.odd, sentence_starter: null, stage: 3, grading_reasoning: null, hint_given: hintGiven, resolved: false, fun_fact: null };
     }
@@ -669,7 +699,7 @@ function mockClaude(promptId, messages, params) {
     if (stage === 4) {
       // Never resolved here -- see the progression comment above, Stage 4
       // always advances to Stage 5 on success rather than ending early.
-      const message = hintGiven ? "Try finishing the sentence again!" : "Finish this sentence!";
+      const message = hintGiven ? "Try finishing the sentence again! " + hintText : "Finish this sentence!";
       // Only frame the word as "The <word> was very" when the passage
       // actually uses it as a noun -- most CORE_WORDS are adjectives, and
       // that template forces an adjective into a noun-subject slot
@@ -682,7 +712,7 @@ function mockClaude(promptId, messages, params) {
     if (resolved) {
       return { message: pickOne(FINAL_RESOLVED_TEMPLATES)(word), display_sentence: groundedSentence, input_type: "text", options: null, word_tiles: null, correct_answer: null, sentence_starter: null, stage: 5, grading_reasoning: null, hint_given: false, resolved: true, fun_fact: "Great context-clue reading!" };
     }
-    const message = hintGiven ? "Try writing your own sentence with \"" + word + "\" again!" : "Now write your own sentence with \"" + word + "\"!";
+    const message = hintGiven ? "Try writing your own sentence with \"" + word + "\" again! " + hintText : "Now write your own sentence with \"" + word + "\"!";
     return { message: message, display_sentence: groundedSentence, input_type: "text", options: null, word_tiles: null, correct_answer: null, sentence_starter: null, stage: 5, grading_reasoning: null, hint_given: hintGiven, resolved: false, fun_fact: null };
   }
 
