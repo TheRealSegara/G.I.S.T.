@@ -6750,6 +6750,14 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
                 <b>{effectiveClassPattern.matchingCount} students</b> in {effectiveClassPattern.className} share this same gap — struggling specifically with <b className="capitalize">{effectiveClassPattern.type}</b>-clue words: {effectiveClassPattern.matchingNames.join(", ")}.
               </p>
               <p className="font-body text-[11px] text-blue-600 mt-2">🔢 Counted directly from each student's logged history, not AI</p>
+              {onCreateTargetedPassage && (
+                <button
+                  onClick={() => { SFX.tap(); onCreateTargetedPassage(effectiveClassPattern.type); }}
+                  className="mt-3 font-display font-700 text-xs text-white bg-blue-600 hover:bg-blue-700 rounded-full px-4 py-2"
+                >
+                  🧭 Create a targeted passage →
+                </button>
+              )}
             </div>
           )}
 
@@ -7864,6 +7872,14 @@ function FileBoxScreen({ onBack, onCreateTargetedPassage }) {
               )}
             </p>
             <p className="font-body text-[11px] text-blue-600 mt-2">🔢 Counted directly from every logged word, not AI</p>
+            {weakest && onCreateTargetedPassage && (
+              <button
+                onClick={() => { SFX.tap(); onCreateTargetedPassage(weakest.type); }}
+                className="mt-3 font-display font-700 text-xs text-white bg-blue-600 hover:bg-blue-700 rounded-full px-4 py-2"
+              >
+                🧭 Create a targeted passage →
+              </button>
+            )}
           </div>
         );
       })()}
@@ -7879,11 +7895,21 @@ function FileBoxScreen({ onBack, onCreateTargetedPassage }) {
         return (
           <div className="mb-4 p-5 rounded-3xl relative z-10 step-in" style={{ background: "#ede9fe", border: "3px solid #7c3aed" }}>
             <p className="font-display font-800 text-xs uppercase tracking-wide text-violet-800 mb-2">🔍 Shared Patterns</p>
-            <div className="space-y-1.5">
+            <div className="space-y-3">
               {sharedGroups.map(([type, students]) => (
-                <p key={type} className="font-body text-sm text-violet-900">
-                  <b>{students.length} students</b> share a <b className="capitalize">{type}</b>-clue gap: {students.map((s) => s.fullName).join(", ")} — consider a small group session.
-                </p>
+                <div key={type}>
+                  <p className="font-body text-sm text-violet-900">
+                    <b>{students.length} students</b> share a <b className="capitalize">{type}</b>-clue gap: {students.map((s) => s.fullName).join(", ")} — consider a small group session.
+                  </p>
+                  {onCreateTargetedPassage && (
+                    <button
+                      onClick={() => { SFX.tap(); onCreateTargetedPassage(type); }}
+                      className="mt-1.5 font-display font-700 text-xs text-white bg-violet-600 hover:bg-violet-700 rounded-full px-4 py-2"
+                    >
+                      🧭 Create a targeted passage →
+                    </button>
+                  )}
+                </div>
               ))}
             </div>
             <p className="font-body text-[11px] text-violet-600 mt-2">🔢 Counted directly from each student's logged history, not AI</p>
