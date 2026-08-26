@@ -6125,10 +6125,16 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
 // rather than an inline expand, deliberately: these get their own room
 // to breathe here instead of being squeezed back into the menu card.
 function MoreTeacherToolsScreen({ onBack, onOpenSampleReport, onOpenTeacherGuide, onOpenBuildYourOwn }) {
+  // All three tools share one teal accent -- they're equal-weight lookups,
+  // not different trust categories, so there's no reason to spend three
+  // hues on them. Red and violet are deliberately NOT used here: red is
+  // reserved for a report's headline diagnosis and violet for Demo Mode,
+  // and reusing either here would blur what those colors mean elsewhere.
+  const TOOL_ACCENT = "#0d9488";
   const tools = [
-    { icon: "🔦", label: "See a sample report", desc: "A finished report, no gameplay needed", onClick: onOpenSampleReport, accent: "#dc2626" },
-    { icon: "❓", label: "How G.I.S.T. works", desc: "The short explainer for new teachers", onClick: onOpenTeacherGuide, accent: "#0d9488" },
-    { icon: "🧭", label: "Build Your Own G.I.S.T.", desc: "Hand the design to your own AI assistant", onClick: onOpenBuildYourOwn, accent: "#7c3aed" },
+    { icon: "🔦", label: "See a sample report", desc: "A finished report, no gameplay needed", onClick: onOpenSampleReport },
+    { icon: "❓", label: "How G.I.S.T. works", desc: "The short explainer for new teachers", onClick: onOpenTeacherGuide },
+    { icon: "🧭", label: "Build Your Own G.I.S.T.", desc: "Hand the design to your own AI assistant", onClick: onOpenBuildYourOwn },
   ];
   return (
     <div className="max-w-2xl mx-auto px-6 py-8 step-in relative min-h-screen">
@@ -6144,14 +6150,14 @@ function MoreTeacherToolsScreen({ onBack, onOpenSampleReport, onOpenTeacherGuide
             key={t.label}
             onClick={() => { SFX.tap(); t.onClick(); }}
             className="w-full flex items-center gap-4 text-left bg-white rounded-2xl px-5 py-4 transition-all hover:scale-[1.01]"
-            style={{ border: `2px solid ${t.accent}55` }}
+            style={{ border: `2px solid ${TOOL_ACCENT}55` }}
           >
             <span className="text-2xl shrink-0">{t.icon}</span>
             <span className="flex-1">
               <span className="block font-display font-700 text-sm text-stone-700">{t.label}</span>
               <span className="block font-body text-xs text-stone-500 mt-0.5">{t.desc}</span>
             </span>
-            <ChevronRight className="w-4 h-4 shrink-0" style={{ color: t.accent }} />
+            <ChevronRight className="w-4 h-4 shrink-0" style={{ color: TOOL_ACCENT }} />
           </button>
         ))}
       </div>
