@@ -71,6 +71,31 @@ function sentenceInPassage(candidate, passageText) {
   if (!target || !passageText) return false;
   return splitIntoSentences(passageText).some((s) => normalizeSentenceForCompare(s) === target);
 }
+
+const NOUN_DETERMINERS = "the|a|an|his|her|its|their|this|that|some";
+const NOUN_FOLLOWERS = "was|is|were|are|felt|seemed|looked|became|grew|helps|help|hurts|has|had";
+// Mirrors wordUsedAsNounInText/starterForcesNounSlot in src/App.jsx --
+// Stage 4's sentence_starter embeds the target word directly, so a starter
+// like "The reluctant was very" forces an adjective into a noun-subject
+// slot, which is nonsensical even though every other shape check passes.
+// Requires the word to END the noun phrase (a boundary or finite verb
+// right after it), not just follow a determiner -- "an enormous orang
+// utan" also has a determiner right before "enormous", but "enormous" is
+// a modifier there, not the head noun.
+function wordUsedAsNounInText(text, targetWord) {
+  const w = String(targetWord || "").toLowerCase().trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (!w || !text) return false;
+  return new RegExp(`\\b(${NOUN_DETERMINERS})\\s+${w}\\b(?=\\s*(?:[.,!?;:]|$|(?:${NOUN_FOLLOWERS})\\b))`, "i").test(
+    String(text).toLowerCase()
+  );
+}
+function starterForcesNounSlot(starter, targetWord) {
+  const w = String(targetWord || "").toLowerCase().trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (!w) return false;
+  return new RegExp(`^(${NOUN_DETERMINERS})\\s+${w}\\s+(was|is|were|are|felt|seemed|looked|became|grew)\\b`, "i").test(
+    String(starter || "").trim().toLowerCase()
+  );
+}
 function getSentenceContaining(text, word) {
   const sentences = splitIntoSentences(text);
   const found = sentences.find((s) => s.toLowerCase().includes(String(word).toLowerCase()));
@@ -123,6 +148,12 @@ function checkInvariants(parsed, targetWord, passageText) {
       if (parsed.options.some((opt) => normalizeSentenceForCompare(opt) === ownSentence)) {
         violations.push(`reverse_clue offered the target word's own sentence as an option (circular): ${JSON.stringify(parsed.options)}`);
       }
+    }
+  }
+  if (parsed.input_type === "text" && parsed.stage === 4 && typeof parsed.sentence_starter === "string" && parsed.sentence_starter.trim()) {
+    const referenceText = (passageText && getSentenceContaining(passageText, targetWord)) || parsed.display_sentence;
+    if (starterForcesNounSlot(parsed.sentence_starter, targetWord) && !wordUsedAsNounInText(referenceText, targetWord)) {
+      violations.push(`Stage 4 sentence_starter forces "${targetWord}" into a noun-subject slot it doesn't fit: "${parsed.sentence_starter}"`);
     }
   }
   if (parsed.input_type === "true_false") {

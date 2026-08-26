@@ -1303,6 +1303,33 @@ function escapeRegex(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+const NOUN_DETERMINERS = "the|a|an|his|her|its|their|this|that|some";
+const NOUN_FOLLOWERS = "was|is|were|are|felt|seemed|looked|became|grew|helps|help|hurts|has|had";
+
+// Stage 4's sentence_starter embeds the target word directly (see prompt),
+// so it must respect the word's real grammatical role -- forcing an
+// adjective into a noun-subject slot ("The reluctant was very ___") reads
+// as nonsensical even though every shape check above still passes. Infer
+// whether the passage actually uses the word as the HEAD of a noun phrase:
+// immediately after a determiner AND immediately ending that phrase
+// (followed by a clause boundary or a finite verb), not just after a
+// determiner -- "an enormous orang utan" also has a determiner right
+// before "enormous", but "enormous" is a modifier, not the noun itself.
+function wordUsedAsNounInText(text, targetWord) {
+  const w = escapeRegex(String(targetWord || "").toLowerCase().trim());
+  if (!w || !text) return false;
+  return new RegExp(`\\b(${NOUN_DETERMINERS})\\s+${w}\\b(?=\\s*(?:[.,!?;:]|$|(?:${NOUN_FOLLOWERS})\\b))`, "i").test(
+    String(text).toLowerCase()
+  );
+}
+function starterForcesNounSlot(starter, targetWord) {
+  const w = escapeRegex(String(targetWord || "").toLowerCase().trim());
+  if (!w) return false;
+  return new RegExp(`^(${NOUN_DETERMINERS})\\s+${w}\\s+(was|is|were|are|felt|seemed|looked|became|grew)\\b`, "i").test(
+    String(starter || "").trim().toLowerCase()
+  );
+}
+
 // Loose check for whether a free-typed "text" answer uses the target word in
 // some recognizable form. Deliberately permissive (a stem match, not a full
 // inflection list) — this only exists to catch the word being fully absent,
@@ -1381,6 +1408,12 @@ function validateCoachResponse(parsed, targetWordText, passageText) {
     if (!parsed.options.every((opt) => sentenceInPassage(opt, passageText))) return false;
     const ownSentence = normalizeSentenceForCompare(getSentenceContaining(passageText, targetWordText));
     if (parsed.options.some((opt) => normalizeSentenceForCompare(opt) === ownSentence)) return false;
+  }
+  if (parsed.input_type === "text" && parsed.stage === 4 && typeof parsed.sentence_starter === "string" && parsed.sentence_starter.trim()) {
+    const referenceText = (passageText && getSentenceContaining(passageText, targetWordText)) || parsed.display_sentence;
+    if (starterForcesNounSlot(parsed.sentence_starter, targetWordText) && !wordUsedAsNounInText(referenceText, targetWordText)) {
+      return false;
+    }
   }
   return true;
 }

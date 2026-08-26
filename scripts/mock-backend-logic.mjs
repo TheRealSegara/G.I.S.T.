@@ -191,6 +191,33 @@ function splitIntoSentences(text) {
   return (text.match(/[^.!?]+[.!?]+/g) || (text ? [text] : [])).map(function (s) { return s.trim(); }).filter(Boolean);
 }
 
+// A handful of curated words genuinely ARE a noun or verb in their real
+// passage sentence (unlike most CORE_WORDS, which are adjectives) --
+// listed explicitly here since the text-based heuristic below can't
+// reliably tell "use camouflage." (camouflage = the noun itself) apart
+// from a case with no determiner nearby at all.
+const STAGE4_NOUN_OR_VERB_WORDS = new Set(["camouflage", "aroma"]);
+
+// Mirrors wordUsedAsNounInText in src/App.jsx -- Stage 4's sentence_starter
+// below embeds the target word directly, so "The <word> was very" only
+// makes sense when the passage actually uses the word as the HEAD of a
+// noun phrase: immediately after a determiner AND immediately ending that
+// phrase (followed by a clause boundary or a finite verb). Requiring both
+// avoids misreading "an enormous orang utan" as "enormous" being a noun --
+// it's a modifier there, not the head, even though a determiner sits
+// right before it too. Most of CORE_WORDS are adjectives ("reluctant",
+// "enormous", ...), so a fixed noun-shaped template produced the same
+// nonsensical noun-subject slot the real coach's prompt now warns against.
+function wordUsedAsNounInMock(text, word) {
+  const w = String(word || "").toLowerCase().trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (STAGE4_NOUN_OR_VERB_WORDS.has(String(word || "").toLowerCase().trim())) return true;
+  if (!w || !text) return false;
+  const followers = "was|is|were|are|felt|seemed|looked|became|grew|helps|help|hurts|has|had";
+  return new RegExp(`\\b(the|a|an|his|her|its|their|this|that|some)\\s+${w}\\b(?=\\s*(?:[.,!?;:]|$|(?:${followers})\\b))`, "i").test(
+    String(text).toLowerCase()
+  );
+}
+
 const STOPWORDS_LIST = ["about", "after", "again", "their", "there", "these", "those", "which", "while", "would", "could", "should", "because", "before", "between", "through", "though", "where", "when", "what", "were", "being", "doing", "having", "other", "really", "still", "every", "never", "always", "something", "someone", "anything", "around", "across", "toward", "towards", "during", "without", "within", "under", "above", "below", "first", "second", "third", "little", "great", "large", "quite"];
 const STOPWORDS = {};
 STOPWORDS_LIST.forEach(function (w) { STOPWORDS[w] = true; });
@@ -486,7 +513,12 @@ function mockClaude(promptId, messages) {
       // Never resolved here -- see the progression comment above, Stage 4
       // always advances to Stage 5 on success rather than ending early.
       const message = hintGiven ? "Try finishing the sentence again!" : "Finish this sentence!";
-      return { message: message, display_sentence: groundedSentence, input_type: "text", options: null, word_tiles: null, correct_answer: null, sentence_starter: "The " + word + " was very", stage: 4, grading_reasoning: null, hint_given: hintGiven, resolved: false, fun_fact: null };
+      // Only frame the word as "The <word> was very" when the passage
+      // actually uses it as a noun -- most CORE_WORDS are adjectives, and
+      // that template forces an adjective into a noun-subject slot
+      // otherwise (e.g. "The reluctant was very ___").
+      const starter = wordUsedAsNounInMock(groundedSentence, word) ? ("The " + word + " was very") : ("It was very " + word);
+      return { message: message, display_sentence: groundedSentence, input_type: "text", options: null, word_tiles: null, correct_answer: null, sentence_starter: starter, stage: 4, grading_reasoning: null, hint_given: hintGiven, resolved: false, fun_fact: null };
     }
 
     // Stage 5: write an original sentence, no scaffolding.
