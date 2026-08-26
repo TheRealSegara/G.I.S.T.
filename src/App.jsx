@@ -15,6 +15,12 @@ import {
   DIAGNOSTIC_SYSTEM_PROMPT,
 } from "../shared/prompts.js";
 import { mockClaude } from "../scripts/mock-backend-logic.mjs";
+// The real, live migration file -- imported as raw text (Vite's `?raw`
+// suffix) rather than copied into a JS string, so the Build Your Own
+// blueprint and the in-app database guide can never drift out of sync
+// with the schema this app actually runs, the same principle already
+// applied to the AI prompts interpolated below.
+import SUPABASE_SCHEMA_SQL from "../supabase/schema.sql?raw";
 
 /* ---------------- Fonts ---------------- */
 const FontImport = () => (
@@ -689,9 +695,19 @@ G.I.S.T. is an AI vocabulary and reading-comprehension coach for Malaysian prima
 
 - Frontend: a single React 18 + Vite single-page app.
 - Backend: Vercel serverless functions acting as a thin, protected proxy in front of an AI provider (Groq's free tier in the original) — the browser never holds an AI API key directly.
-- Database: Supabase (Postgres) for student accounts and session history.
+- Database: Supabase (Postgres) for student accounts, classes, and session history — four tables, full schema and the security model behind it are further down in THE DATABASE section. Access control is enforced in this app's own server code, not Supabase Auth or Row Level Security policies.
 - Auth model: one shared access code per school or class, not per-teacher or per-student accounts — whoever has the code can use the app on a device until the code's session expires. Students then sign up once with their name and a 3-animal "secret" (not a real password, deliberately kid-simple), kept separate from the animal companion shown on screen so a classmate can't read it off the screen during play.
 - Cost control: every AI call is metered against a small daily quota per access code, and session word counts are fixed rather than open-ended, specifically to keep AI spend predictable on a free tier.
+
+=== BEYOND THE COACH: THE REST OF THE APP ===
+
+The coach and its report are the core loop, but a real classroom tool needs more around it. These aren't AI calls — they're plain app features worth keeping if you adapt this:
+
+- Classes: a teacher can group their students into classes (e.g. "4A") for roster and rollup purposes. Optional — a student can be in at most one class, or none.
+- Demo Mode: a presenter-facing toggle that swaps every AI call for instant, deterministic scripted replies instead of real ones, with real student signup and session-saving also switched off — a true sandbox, useful for exploring the app or demoing it live with zero API cost and zero waiting. A "skip ahead to the report" shortcut (Demo Mode only) lets a presenter play one word for real, then synthesizes the rest of that session's words with varied profiles and jumps straight to a fully generated report, for fast live demos without grinding through every word.
+- Cross-session History: a student's report can expand to show trends across every session they've ever finished, not just today's — an independent-solve-rate chart over time, clue-type mastery pooled across all sessions, words that keep recurring and how they went each time, and a list of past sessions to open individually. Deliberately kept separate from today's report (a distinct visual treatment, not just more boxes) and only offered once there's a second session to compare against.
+- Confidence calibration: the app tracks whether a student's own self-report ("I already knew this word") matches what actually happened (did they need a hint, or fail outright) — persistently, across every session, not just flagged once. This becomes a specific, evidence-backed line in the report rather than a vague "the student seems overconfident."
+- Teacher follow-up loop: each report can suggest one concrete next classroom action. The next time that same student plays, the report shows that suggestion again with a small box to log whether it worked — closing the loop instead of generating a new disconnected suggestion every single time.
 
 === THE ACTUAL AI PROMPTS ===
 
@@ -723,6 +739,17 @@ ${DIAGNOSTIC_SYSTEM_PROMPT}
 - The diagnostic engine is a completely separate AI call from the coach, run only once at the end of a session, reading a structured log rather than the raw conversation — this keeps the report's judgment independent of whatever tone the coach happened to take mid-session.
 - There's a deliberate minimum pacing delay before a student can submit an answer, and the app tracks whether an answer landed suspiciously close to that floor — a signal for "this was a guess," fed into the diagnostic report as evidence, not a hard block.
 - Every report claim names the specific word and evidence behind it. It never predicts future performance, never suggests reteaching, and always ends in one real, specific next classroom action — it's built to be an assessment tool, not a re-teaching tool, so the teacher stays in control of what happens next.
+- Calibration and cross-session History are counted directly from logged data, deterministically, never left to an AI to eyeball — the diagnostic engine is told these numbers as established fact and writes prose around them, rather than being asked to also do the counting itself.
+
+=== THE DATABASE ===
+
+The real schema.sql migration, copied verbatim (run once in your own Supabase project's SQL Editor):
+
+\`\`\`sql
+${SUPABASE_SCHEMA_SQL}
+\`\`\`
+
+The shape is deliberately simple: classes -> students -> sessions -> session_words, each scoped to an access-code "label" rather than a global namespace, so two different schools can each enroll a student with the same name with zero collision or cross-visibility. Notice the security model in the comments at the top: Row Level Security is turned on for every table, but with NO policies defined — meaning the public/anon key this app's frontend could theoretically expose grants zero access to this data by itself. Every real read or write goes through this app's own server-side API routes using the service-role key (never shipped to the browser), and those routes are what actually check "does this access-code label match, does this teacher own this student." If you adapt this, keep that pattern rather than switching to Supabase Auth or RLS policies — it's what lets one access code safely represent a whole class of children's data without a heavier per-user auth system.
 
 === NOW, PLEASE ADAPT THIS FOR ME ===
 
@@ -6203,12 +6230,37 @@ function TeacherGuideScreen({ onBack }) {
 
       <Section icon="📔" title="The diagnostic report">
         <p>Every word attempt during a session is logged automatically (which word, how many hints it took, whether it was skipped, and more). That log is what actually gets analyzed — nothing about the report is guessed or generic.</p>
-        <p>The report opens with a one-line <b>teal Summary</b> and the <b>blue</b> count boxes, counted directly from the log, no AI involved. Tap "See full details" for the rest: the <b>red</b> headline diagnosis and the <b>amber</b> boxes, the AI's written analysis behind it.</p>
+        <p>The report opens with a one-line <b>teal Summary</b> and the <b>blue</b> count boxes, counted directly from the log, no AI involved. Tap "See full details" for the rest: the <b>red</b> headline diagnosis (the one thing to take away) and the <b>amber</b> boxes, the AI's written analysis behind it. Each color means exactly this one thing everywhere it appears in the app — blue is always "counted, not AI," red is always the single headline diagnosis, and so on.</p>
+      </Section>
+
+      <Section icon="📈 " title="Their history across sessions">
+        <p>Once a student has a second finished session, their report gets a "▼ See history across sessions" toggle — set apart in <b>indigo</b> so it's never confused with today's numbers above it. It pools their independent-solve rate as a chart over time, clue-type mastery across every session (not just today's handful of words), words that keep recurring and how each attempt went, and a list of past sessions you can open individually.</p>
+      </Section>
+
+      <Section icon="🤔" title="Confidence & calibration">
+        <p>Whenever a student says "I already knew this word" before starting, the app remembers what actually happened next — did they land it independently, or need a hint anyway? That comparison builds up across every session, and once there's enough of a sample, the report names it plainly: a student who consistently overestimates what they know, or one who says a word was new but then claims they knew it all along. It's a real, counted pattern, not a guess about the student's attitude.</p>
+      </Section>
+
+      <Section icon="📝" title="Following up">
+        <p>A report's "What To Try" suggestion doesn't just disappear once you close it. The next time that same student plays and you view their next report, it shows the previous suggestion again alongside a small box to note whether it actually worked — so the loop closes instead of every report starting from zero.</p>
       </Section>
 
       <Section icon="🗃️" title="The File Box">
         <p>Every student who's signed up under your access code shows up here, with their full session history — reachable any time from the main menu, not just right after a student finishes playing. Open a student to see their past sessions, and open a session to see its full report again.</p>
         <p>Two small icons sit next to each student: <b>🔑 Reset secret</b> lets you set new secret animals with a student right there if they've forgotten theirs, no need to know the old ones. <b>🗑️ Delete</b> permanently removes that student and every one of their sessions — useful for clearing out a test account or a duplicate signup. The same 🗑️ delete also appears next to each individual session, for removing just one session without touching the rest of a student's history. Both deletes ask you to confirm first, and neither can be undone once confirmed, so use them deliberately.</p>
+      </Section>
+
+      <Section icon="🗂️" title="Classes">
+        <p>If you teach more than one group under the same access code, File Box lets you create classes (like "4A" or "Reading Group 2") and assign each student to one — purely organizational, so a roster of 60 students doesn't read as one long undifferentiated list. A student can belong to at most one class, or none; assigning and reassigning is always available from File Box, never a one-time choice.</p>
+      </Section>
+
+      <Section icon="🧰" title="More Teacher Tools">
+        <p>The main menu deliberately keeps only the two things you'll use every session — Create a Custom Map and File Box — in view. Everything else you're reading about in this guide (the sample report, this guide itself, Build Your Own G.I.S.T.) lives one tap further in, behind the "🧰 More Teacher Tools" button, so the everyday actions never have to compete with the occasional ones for space.</p>
+      </Section>
+
+      <Section icon="🎬" title="Demo Mode">
+        <p>A toggle on the main menu for presenting or exploring without spending real AI calls or creating real student data. With it on, every AI reply is instant and scripted instead of a real network call, and no real student account or session ever gets saved — a genuine sandbox, not just a faster version of the real thing.</p>
+        <p>Inside a Demo Mode session, once you've played one word for real through all 5 stages, a "⏩ Skip ahead to the report" button appears — it fills in the rest of that passage's words with varied (synthesized, clearly not-real) results and jumps straight to a fully generated report, for showing the whole arc in a live demo without playing every single word.</p>
       </Section>
     </div>
   );
@@ -6223,6 +6275,7 @@ function TeacherGuideScreen({ onBack }) {
 function BuildYourOwnScreen({ onBack }) {
   const [view, setView] = useState("blueprint"); // "blueprint" | "next-steps"
   const [copied, setCopied] = useState(false);
+  const [copiedSchema, setCopiedSchema] = useState(false);
 
   const Section = ({ icon, title, children }) => (
     <div className="bg-white p-5 mb-4 rounded-3xl relative z-10" style={CARD_TEAL}>
@@ -6249,6 +6302,17 @@ function BuildYourOwnScreen({ onBack }) {
       // Clipboard API can be unavailable (insecure context, permissions,
       // older browser) — the prompt is still selectable by hand from the
       // box below, so this just silently skips the one-click convenience.
+    }
+  }
+
+  async function handleCopySchema() {
+    SFX.click();
+    try {
+      await navigator.clipboard.writeText(SUPABASE_SCHEMA_SQL);
+      setCopiedSchema(true);
+      setTimeout(() => setCopiedSchema(false), 2000);
+    } catch (e) {
+      // Same best-effort fallback as handleCopy above.
     }
   }
 
@@ -6305,8 +6369,23 @@ function BuildYourOwnScreen({ onBack }) {
           </Section>
 
           <Section icon="🗄️" title="Somewhere to save student progress">
-            <p>This is where student accounts and their session history actually live. Supabase gives out a free database for this — free, no credit card needed.</p>
+            <p>This is where student accounts, classes, and session history actually live. Supabase gives out a free Postgres database for this — free, no credit card needed.</p>
             <p><a href="https://supabase.com" target="_blank" rel="noopener noreferrer" className="text-teal-700 underline font-700">supabase.com<span className="sr-only"> (opens in a new tab)</span></a></p>
+            <p>Once you have a project, open its <b>SQL Editor</b> and run this — the exact migration this app uses, four tables (classes, students, sessions, session_words). Notice it turns on Row Level Security but defines no policies: that's deliberate, it means the public key alone grants nobody access, and every real read or write instead goes through this app's own server code, which checks the access code and ownership itself. Keep that pattern if you adapt this — it's what lets one shared access code safely stand in for a whole class of children's data.</p>
+            <button
+              onClick={handleCopySchema}
+              className="font-display font-700 text-sm text-teal-700 hover:text-teal-900 bg-white rounded-full px-4 py-2 border-2 mt-1"
+              style={{ borderColor: "#0d9488" }}
+              aria-live="polite"
+            >
+              {copiedSchema ? "✅ Copied!" : "📋 Copy schema SQL"}
+            </button>
+            <div
+              className="mt-3 p-4 rounded-2xl bg-stone-50 font-body text-xs text-stone-600 leading-relaxed whitespace-pre-wrap overflow-y-auto"
+              style={{ border: "2px solid #d6d3d1", maxHeight: "220px" }}
+            >
+              {SUPABASE_SCHEMA_SQL}
+            </div>
           </Section>
 
           <Section icon="🌐" title="Somewhere to host the website">
