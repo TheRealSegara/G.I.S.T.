@@ -6955,28 +6955,6 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
                   ))}
                 </div>
               )}
-              {/* Session-over-session delta: At a Glance only ever showed
-                  this session's own counts, never how they compare to the
-                  immediately previous one -- otherSessions[0] (newest-first,
-                  current session already excluded) already carries
-                  independentCount/totalCount from the same roster fetch
-                  hasHistory itself depends on, so no extra request needed. */}
-              {hasHistory && otherSessions[0] && otherSessions[0].totalCount > 0 && (() => {
-                const priorRate = Math.round((otherSessions[0].independentCount / otherSessions[0].totalCount) * 100);
-                const sessionSolved = glance.independent + glance.withHelp;
-                if (sessionSolved === 0) return null;
-                const currentRate = Math.round((glance.independent / sessionSolved) * 100);
-                const delta = currentRate - priorRate;
-                const arrow = delta > 0 ? "📈" : delta < 0 ? "📉" : "➡️";
-                return (
-                  <div className="mt-3 pt-3 border-t border-blue-200">
-                    <p className="text-xs font-display font-700 text-blue-800">{arrow} Since last session</p>
-                    <p className="text-xs font-body text-blue-700">
-                      <b>{currentRate}%</b> independent this time ({glance.independent}/{sessionSolved}) — {delta === 0 ? "same as" : delta > 0 ? "up from" : "down from"} <b>{priorRate}%</b> ({otherSessions[0].independentCount}/{otherSessions[0].totalCount}) last session.
-                    </p>
-                  </div>
-                );
-              })()}
               {wordHistory && (() => {
                 // Word-retention (item 1): real evidence of growth over
                 // time -- a repeat word this session that landed at an
@@ -7001,17 +6979,6 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
                   </div>
                 );
               })()}
-              {/* All-time recurring words: the full list (every past
-                  encounter, oldest to newest) only ever showed up inside
-                  the History toggle, gated at 2+ sessions -- a one-line
-                  teaser here surfaces the headline before a teacher has to
-                  find and click that toggle at all. */}
-              {recurringWords.length > 0 && (
-                <p className="mt-3 pt-3 border-t border-blue-200 text-xs font-body text-blue-700">
-                  🔁 {recurringWords.slice(0, 2).map(([word, h]) => `"${word}" (seen ${h.length}×)`).join(", ")}
-                  {recurringWords.length > 2 ? `, +${recurringWords.length - 2} more` : ""} — full history below.
-                </p>
-              )}
             </div>
 
             <div className="p-5 rounded-3xl" style={{ background: "#dbeafe", border: "3px solid #2563eb" }}>
@@ -7043,6 +7010,53 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
               })()}
             </div>
           </div>
+
+          {/* Growth Since Last Session: promoted out of At a Glance into
+              its own card -- a session-over-session comparison is a
+              distinct claim from this session's own counts, and deserved
+              its own visual weight rather than being a couple of lines a
+              teacher could skim past. */}
+          {hasHistory && otherSessions[0] && otherSessions[0].totalCount > 0 && (() => {
+            const priorRate = Math.round((otherSessions[0].independentCount / otherSessions[0].totalCount) * 100);
+            const sessionSolved = glance.independent + glance.withHelp;
+            if (sessionSolved === 0) return null;
+            const currentRate = Math.round((glance.independent / sessionSolved) * 100);
+            const delta = currentRate - priorRate;
+            const arrow = delta > 0 ? "📈" : delta < 0 ? "📉" : "➡️";
+            return (
+              <div className="p-5 rounded-3xl" style={{ background: "#dbeafe", border: "3px solid #2563eb" }}>
+                <p className="font-display font-800 text-xs uppercase tracking-wide text-blue-800 mb-2">{arrow} Growth Since Last Session</p>
+                <p className="font-body text-sm text-blue-900 leading-relaxed">
+                  <b>{currentRate}%</b> independent this time ({glance.independent}/{sessionSolved}) — {delta === 0 ? "same as" : delta > 0 ? "up from" : "down from"} <b>{priorRate}%</b> ({otherSessions[0].independentCount}/{otherSessions[0].totalCount}) last session.
+                </p>
+                <p className="font-body text-[11px] text-blue-600 mt-2">🔢 Counted directly from logged history, not AI</p>
+              </div>
+            );
+          })()}
+
+          {/* Recurring Words: same promotion -- this used to only ever show
+              up inside the History toggle, gated at 2+ sessions. Its own
+              card here, with a link straight into History, means a
+              persistent gap doesn't depend on a teacher finding and
+              clicking that toggle first. */}
+          {recurringWords.length > 0 && (
+            <div className="p-5 rounded-3xl" style={{ background: "#dbeafe", border: "3px solid #2563eb" }}>
+              <p className="font-display font-800 text-xs uppercase tracking-wide text-blue-800 mb-2">🔁 Recurring Words</p>
+              <p className="font-body text-sm text-blue-900 leading-relaxed">
+                {recurringWords.slice(0, 3).map(([word, h]) => `"${word}" (seen ${h.length}×)`).join(", ")}
+                {recurringWords.length > 3 ? `, +${recurringWords.length - 3} more` : ""}.
+              </p>
+              {hasHistory && (
+                <button
+                  type="button"
+                  onClick={() => { SFX.tap(); setShowHistory(true); }}
+                  className="mt-3 font-display font-700 text-xs text-blue-700 hover:text-blue-900 underline decoration-dotted underline-offset-2"
+                >
+                  See full history below →
+                </button>
+              )}
+            </div>
+          )}
 
           <div className="text-center">
             <button
