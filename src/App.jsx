@@ -4971,6 +4971,16 @@ function buildReportHtml(studentId, log, summary) {
     .filter((s) => s.text)
     .map((s) => `<div class="summary ${s.cls}"><h2>${s.label}</h2>${boldToHtml(s.text)}</div>`)
     .join("");
+  // This file is meant to leave the app -- printed, saved as PDF, or
+  // handed to a parent or another teacher who never saw the live G.I.S.T.
+  // UI at all, so it can't lean on the in-app clue-type legend or
+  // counted-vs-AI color legend the way the live report does. Both get
+  // baked in here as plain, static text/HTML instead, reusing the same
+  // CLUE_TYPE_INFO definitions the live legend uses so the wording can
+  // never drift between the two.
+  const clueTypeLegendHtml = CLUE_TYPE_INFO.map(
+    (info) => `<p>${info.emoji} <strong>${escapeHtml(info.label)}</strong> — ${escapeHtml(info.desc)} <em>"${escapeHtml(info.example)}"</em></p>`
+  ).join("");
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -4996,6 +5006,10 @@ function buildReportHtml(studentId, log, summary) {
   .summary p.headline { font-weight: 700; font-size: 1.1em; margin-top: 0; }
   .summary ul { margin: 4px 0 10px 0; padding-left: 20px; }
   .summary li { margin: 3px 0; }
+  .key { margin-top: 14px; font-size: 12px; color: #57534e; }
+  .legend { margin-top: 16px; padding: 14px 16px; border: 2px dashed #a8a29e; background: #fafaf9; border-radius: 12px; }
+  .legend h3 { font-size: 13px; margin: 0 0 8px 0; text-transform: uppercase; letter-spacing: 0.03em; color: #57534e; }
+  .legend p { font-size: 13px; line-height: 1.6; margin: 5px 0; }
   .hint { margin-top: 30px; font-size: 12px; color: #92400e; }
 </style>
 </head>
@@ -5004,11 +5018,16 @@ function buildReportHtml(studentId, log, summary) {
   <p><strong>Student / Class:</strong> ${escapeHtml(studentId)}</p>
   <p><strong>Words logged this session:</strong> ${log.length}</p>
   ${sectionsHtml}
+  ${sections.length > 0 ? `<p class="key">🤖 The sections above are the AI's written analysis. 🔢 The table below is the raw, counted data it was written from — not AI.</p>` : ""}
   <div class="table-wrap">
     <table>
       <thead><tr><th>Word</th><th>Clue Type</th><th>Stage Reached</th><th>Hints</th><th></th></tr></thead>
       <tbody>${rows || '<tr><td colspan="5">No words logged yet.</td></tr>'}</tbody>
     </table>
+  </div>
+  <div class="legend">
+    <h3>What the clue types mean</h3>
+    ${clueTypeLegendHtml}
   </div>
   <p class="hint">Opened this file in your browser? Use your browser's own Print or Save-as-PDF option (usually Ctrl+P or Cmd+P) to print or save it.</p>
 </body>
@@ -5450,6 +5469,20 @@ function computeConfidenceBadge(log) {
   if (totalSignals >= 2 || skippedCount >= 2) level = "Low";
   else if (totalSignals >= 1 || skippedCount >= 1) level = "Medium";
   return { level, guessSignals, mismatchSignals, skippedCount };
+}
+
+// Plain-language reasons behind a confidence badge -- shown inline on the
+// badge itself rather than only in a hover title, which never reaches a
+// teacher on a tablet or phone (no hover there at all). Every other
+// counted stat in this report names its own evidence; this makes the
+// confidence badge do the same instead of being a bare level with no
+// visible backing.
+function confidenceBadgeReasons(badge) {
+  const parts = [];
+  if (badge.guessSignals > 0) parts.push(`${badge.guessSignals} answer${badge.guessSignals === 1 ? "" : "s"} came in almost instantly`);
+  if (badge.mismatchSignals > 0) parts.push(`${badge.mismatchSignals} self-report${badge.mismatchSignals === 1 ? "" : "s"} didn't match what happened`);
+  if (badge.skippedCount > 0) parts.push(`${badge.skippedCount} word${badge.skippedCount === 1 ? "" : "s"} skipped`);
+  return parts;
 }
 
 // Demo Mode "skip to report" fast-forward: once a presenter has fully
@@ -6654,6 +6687,7 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
               // prose, same underlying signals the AI's own "How Reliable"
               // section discusses in words -- see computeConfidenceBadge.
               const badge = computeConfidenceBadge(log);
+              const reasons = confidenceBadgeReasons(badge);
               const tone =
                 badge.level === "High"
                   ? { bg: "#d1fae5", border: "#059669", text: "#065f46" }
@@ -6661,13 +6695,23 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
                   ? { bg: "#fef3c7", border: "#d97706", text: "#92400e" }
                   : { bg: "#fee2e2", border: "#dc2626", text: "#991b1b" };
               return (
-                <p
-                  className="inline-flex items-center gap-1.5 mt-3 px-3 py-1.5 rounded-full font-display font-800 text-xs"
-                  style={{ background: tone.bg, border: `2px solid ${tone.border}`, color: tone.text }}
-                  title="How much to trust this session's correct answers, based on guess-speed answers and self-report mismatches"
-                >
-                  🔒 {badge.level} confidence
-                </p>
+                <div className="mt-3">
+                  <p
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full font-display font-800 text-xs"
+                    style={{ background: tone.bg, border: `2px solid ${tone.border}`, color: tone.text }}
+                    title="How much to trust this session's correct answers: lower when an answer came in unusually fast, or a student's own guess about a word didn't match what actually happened."
+                  >
+                    🔒 {badge.level} confidence
+                  </p>
+                  {/* Reasons shown inline, not just in the title above --
+                      a hover tooltip never reaches a teacher on a tablet
+                      or phone, and every other counted stat in this report
+                      names its own evidence, so this shouldn't be the one
+                      bare exception. */}
+                  {reasons.length > 0 && (
+                    <p className="font-body text-[11px] text-stone-500 mt-1.5">Why: {reasons.join(", ")}.</p>
+                  )}
+                </div>
               );
             })()}
           </div>
