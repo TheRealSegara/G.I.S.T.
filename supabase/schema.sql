@@ -40,7 +40,6 @@ create table if not exists students (
   access_code_label text not null,
   full_name text not null,
   full_name_key text not null, -- normalizeName(full_name): lowercased/trimmed/collapsed, the actual lookup key
-  secret_hash text not null, -- HMAC-SHA256 of their 3-animal secret sequence, see api/_studentAuth.js
   avatar_config jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now(),
   last_login_at timestamptz
@@ -48,6 +47,13 @@ create table if not exists students (
 
 create unique index if not exists students_access_code_name_key
   on students (access_code_label, full_name_key);
+
+-- Students used to also carry a 3-animal "secret" as a kid-simple re-entry
+-- check; removed in favor of identifying students by full name alone,
+-- which the unique index above already guarantees can't collide. Safe to
+-- re-run against a fresh database too (the column was never created there
+-- in the first place, so this is a no-op).
+alter table students drop column if exists secret_hash;
 
 -- Added after the table already existed in earlier deployments; safe to
 -- re-run against a fresh database too. Nullable and defaults to null, so

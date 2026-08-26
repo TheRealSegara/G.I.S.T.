@@ -755,7 +755,7 @@ G.I.S.T. is an AI vocabulary and reading-comprehension coach for Malaysian prima
 - Frontend: a single React 18 + Vite single-page app.
 - Backend: Vercel serverless functions acting as a thin, protected proxy in front of an AI provider (Groq's free tier in the original) — the browser never holds an AI API key directly.
 - Database: Supabase (Postgres) for student accounts, classes, and session history — four tables, full schema and the security model behind it are further down in THE DATABASE section. Access control is enforced in this app's own server code, not Supabase Auth or Row Level Security policies.
-- Auth model: one shared access code per school or class, not per-teacher or per-student accounts — whoever has the code can use the app on a device until the code's session expires. Students then sign up once with their name and a 3-animal "secret" (not a real password, deliberately kid-simple), kept separate from the animal companion shown on screen so a classmate can't read it off the screen during play.
+- Auth model: one shared access code per school or class, not per-teacher or per-student accounts — whoever has the code can use the app on a device until the code's session expires. Students then sign up once with their full name, which the database already keeps unique per access code, so there's nothing to memorize beyond their own name.
 - Cost control: every AI call is metered against a small daily quota per access code, and session word counts are fixed rather than open-ended, specifically to keep AI spend predictable on a free tier.
 
 === BEYOND THE COACH: THE REST OF THE APP ===
@@ -869,8 +869,9 @@ function clearCachedAuth() {
 
 /* ---------------- Student accounts (auth) ---------------- */
 // Same bridge pattern as the teacher access-token above, but for the
-// signed-in student (full name + 3-animal secret, see api/_studentAuth.js).
-// Separate token/storage from the teacher token: the teacher token proves
+// signed-in student (identified by full name alone, see
+// api/_studentAuth.js). Separate token/storage from the teacher token: the
+// teacher token proves
 // "this device is unlocked for School X," the student token additionally
 // proves "and this is specifically Ahmad," needed to save a session under
 // the right student_id.
@@ -1062,16 +1063,13 @@ async function apiRequest(path, { method = "GET", body, token } = {}) {
   // onAuthInvalidated in App) — callClaude already does this for AI
   // calls, but File Box/session/roster calls through this helper were
   // missing it, silently showing a generic "couldn't load" error with no
-  // way back in. The tricky part: /api/student-auth returns a 401 for
-  // TWO different reasons (the caller's own teacher token being bad, or a
-  // student simply mistyping their name/secret animals), and both cases
-  // send the exact same teacher token — student signup/login has no
-  // student token yet to distinguish them by. Comparing token identity
-  // alone can't tell these apart (it's the same token either way), so
-  // this relies on the server's own explicit `tokenInvalid` flag (see the
-  // matching comment in api/_studentAuthHandler.js) instead of guessing
-  // from status code + token identity — a student's wrong-secret 401
-  // never sets that flag, so it correctly never pops this overlay.
+  // way back in. The tricky part: /api/student-auth can 401 for the
+  // caller's own teacher token being bad, but a student mistyping their
+  // name gets a 404, not a 401 — both send the exact same teacher token
+  // (student signup/login has no student token yet to distinguish them
+  // by), so this relies on the server's own explicit `tokenInvalid` flag
+  // (see the matching comment in api/_studentAuthHandler.js) instead of
+  // guessing from status code + token identity.
   if (response.status === 401 && data?.tokenInvalid && token && token === currentAuthToken) onAuthInvalidated?.();
   if (!response.ok) {
     const err = new Error(data?.error || "Request failed");
@@ -1087,34 +1085,22 @@ async function apiRequest(path, { method = "GET", body, token } = {}) {
 // and sessionStorage together, so currentStudentToken only ever changes
 // via the same effect-driven path studentAuth already uses, never a
 // side channel that state could later stomp back to stale.
-async function studentSignup(fullName, secretSequence, avatarConfig) {
+async function studentSignup(fullName, avatarConfig) {
   const data = await apiRequest("/api/student-auth", {
     method: "POST",
     token: currentAuthToken,
-    body: { mode: "signup", fullName, secret: secretSequence, avatarConfig },
+    body: { mode: "signup", fullName, avatarConfig },
   });
   return data;
 }
 
-async function studentLogin(fullName, secretSequence) {
+async function studentLogin(fullName) {
   const data = await apiRequest("/api/student-auth", {
     method: "POST",
     token: currentAuthToken,
-    body: { mode: "login", fullName, secret: secretSequence },
+    body: { mode: "login", fullName },
   });
   return data;
-}
-
-// Teacher-mediated recovery for a student who forgot their secret
-// animals: the teacher picks the roster row and sets a new sequence with
-// the student right there, no email/identity-verification flow needed
-// since the teacher's own token is already the authorization.
-async function resetStudentSecret(studentId, secretSequence) {
-  return apiRequest("/api/student-auth", {
-    method: "POST",
-    token: currentAuthToken,
-    body: { mode: "reset", studentId, secret: secretSequence },
-  });
 }
 
 async function saveSession(payload) {
@@ -1557,61 +1543,6 @@ function MakerResultSkeleton() {
   );
 }
 
-// Must match SECRET_LENGTH in api/_studentAuth.js.
-const SECRET_LENGTH = 3;
-
-// Controlled 3-tap animal sequence picker: used both to CHOOSE a new
-// secret at signup and to RE-ENTER an existing one at login (the tap
-// interaction is identical either way; the copy around it, handled by
-// the caller, is what differs). Deliberately a separate pool of taps
-// from CompanionGrid's coach-companion picker below, even though it
-// draws on the same ANIMAL_COMPANIONS list — the point is this choice
-// never appears on screen again after signup, unlike the visible coach
-// companion, so a classmate who's watched someone play can't just read
-// their password off the screen.
-function SecretAnimalPicker({ value, onChange }) {
-  return (
-    <div>
-      <div className="flex items-center justify-center gap-2.5 mb-4">
-        {Array.from({ length: SECRET_LENGTH }).map((_, i) => {
-          const filled = value[i];
-          const animal = filled ? ANIMAL_COMPANIONS.find((a) => a.id === filled) : null;
-          return (
-            <div
-              key={i}
-              className="w-14 h-14 rounded-full flex items-center justify-center text-2xl bg-white"
-              style={{ border: animal ? "3px solid #0d9488" : "3px dashed #d6d3d1" }}
-            >
-              {animal ? animal.emoji : <span className="text-stone-300 text-xl">?</span>}
-            </div>
-          );
-        })}
-      </div>
-      <div className="grid grid-cols-4 gap-2.5">
-        {ANIMAL_COMPANIONS.map((a) => (
-          <button
-            key={a.id}
-            onClick={() => { if (value.length < SECRET_LENGTH) { SFX.tap(); onChange([...value, a.id]); } }}
-            disabled={value.length >= SECRET_LENGTH}
-            className="flex flex-col items-center gap-0.5 p-2.5 rounded-2xl bg-white transition-all hover:scale-105 disabled:opacity-40 disabled:hover:scale-100"
-            style={{ border: "3px solid #d6d3d1" }}
-            aria-label={a.label}
-          >
-            <span className="text-2xl">{a.emoji}</span>
-          </button>
-        ))}
-      </div>
-      {value.length > 0 && (
-        <div className="text-center mt-3">
-          <button onClick={() => { SFX.click(); onChange([]); }} className="font-body text-xs text-stone-500 underline hover:text-stone-700">
-            Start over
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
 /* ---------------- Setup Screen ---------------- */
 function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, bilingual, onToggleBilingual, onStudentAuthenticated, onOpenFileBox, onOpenTeacherTools, initialMakerFocus = null, onMakerFocusConsumed }) {
   const [mode, setMode] = useState(initialMakerFocus ? "maker" : null); // null (main menu) | "tour" | "play" | "maker"
@@ -1636,15 +1567,14 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, bilingual, 
   const [afterTour, setAfterTour] = useState("wizard");
 
   // New/returning student sign-up and login (mode === "student-choice" |
-  // "student-signup" | "student-login"). A new student's chosen secret is
-  // carried forward (not submitted yet) through the tutorial and the
+  // "student-signup" | "student-login"). A new student's name is carried
+  // forward (not submitted yet) through the tutorial and the
   // avatar-builder wizard steps, since the account is only actually
   // created once the whole avatarConfig is assembled, at the final
   // "Start my adventure" confirm — pendingSignup marks that a signup
   // call is still owed at that point, vs. a returning student who's
   // already authenticated and just needs onBegin().
   const [authName, setAuthName] = useState("");
-  const [authSecret, setAuthSecret] = useState([]);
   const [pendingSignup, setPendingSignup] = useState(false);
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState(null);
@@ -2160,7 +2090,6 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, bilingual, 
               onClick={() => {
                 SFX.tap();
                 setAuthName("");
-                setAuthSecret([]);
                 setAuthError(null);
                 setMode("student-signup");
               }}
@@ -2172,7 +2101,6 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, bilingual, 
               onClick={() => {
                 SFX.tap();
                 setAuthName("");
-                setAuthSecret([]);
                 setAuthError(null);
                 setMode("student-login");
               }}
@@ -2189,11 +2117,11 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, bilingual, 
     );
   }
 
-  /* -------- New student: name + secret (avatar collected later, in the
+  /* -------- New student: just their name (avatar collected later, in the
      wizard, so the account is created once with its real avatarConfig
      instead of a placeholder that would need a separate update call) -------- */
   if (mode === "student-signup") {
-    const canContinue = authName.trim().length > 0 && authSecret.length === SECRET_LENGTH;
+    const canContinue = authName.trim().length > 0;
     return (
       <div className="max-w-md mx-auto px-6 py-8 step-in min-h-screen flex flex-col justify-center relative">
         <FloatingDecor density={5} />
@@ -2201,7 +2129,7 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, bilingual, 
           <p className="text-4xl text-center mb-3">🆕</p>
           <h1 className="font-display font-800 text-xl text-stone-700 text-center mb-1">New Student</h1>
           <p className="font-body text-sm text-stone-500 text-center mb-5">
-            Enter your full name, then pick 3 secret animals, in order. Remember them, you'll need them to log back in!
+            Enter your full name. Next time, just type it again to pick up where you left off!
           </p>
           <input
             value={authName}
@@ -2214,7 +2142,6 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, bilingual, 
             className="w-full bg-amber-50 rounded-2xl border-2 border-amber-300 px-4 py-3.5 font-body text-lg text-stone-700 text-center focus:outline-none focus:border-amber-500 mb-5"
             autoFocus
           />
-          <SecretAnimalPicker value={authSecret} onChange={setAuthSecret} />
           {authError && <p className="font-body text-xs text-rose-600 text-center mt-4" aria-live="polite">{authError}</p>}
           <div className="flex items-center justify-center gap-3 mt-6">
             <BigButton variant="ghost" onClick={() => setMode("student-choice")}>
@@ -2240,21 +2167,20 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, bilingual, 
     );
   }
 
-  /* -------- Returning student: name + secret, verified immediately -------- */
+  /* -------- Returning student: name only, looked up immediately -------- */
   if (mode === "student-login") {
-    const canSubmit = authName.trim().length > 0 && authSecret.length === SECRET_LENGTH;
+    const canSubmit = authName.trim().length > 0;
     async function handleLogin() {
       if (!canSubmit) return;
       SFX.click();
       setAuthLoading(true);
       setAuthError(null);
       try {
-        const data = await studentLogin(authName.trim(), authSecret);
+        const data = await studentLogin(authName.trim());
         onStudentAuthenticated(data.token, data.expiresAt, data.student);
         setStudentId(data.student.fullName);
         setAvatarConfig(data.student.avatarConfig);
         setPendingSignup(false);
-        setAuthSecret([]);
         setStep(3);
         setMode("play");
       } catch (e) {
@@ -2269,7 +2195,7 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, bilingual, 
         <div className="bg-white p-8 step-in relative z-10" style={CARD_GOLD}>
           <p className="text-4xl text-center mb-3">↩️</p>
           <h1 className="font-display font-800 text-xl text-stone-700 text-center mb-1">Returning Student</h1>
-          <p className="font-body text-sm text-stone-500 text-center mb-5">Enter your full name and your 3 secret animals, in order.</p>
+          <p className="font-body text-sm text-stone-500 text-center mb-5">Enter your full name, exactly as you signed up with.</p>
           <input
             value={authName}
             onChange={(e) => setAuthName(e.target.value)}
@@ -2281,10 +2207,9 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, bilingual, 
             className="w-full bg-amber-50 rounded-2xl border-2 border-amber-300 px-4 py-3.5 font-body text-lg text-stone-700 text-center focus:outline-none focus:border-amber-500 mb-5"
             autoFocus
           />
-          <SecretAnimalPicker value={authSecret} onChange={setAuthSecret} />
           {authError && <p className="font-body text-xs text-rose-600 text-center mt-4" aria-live="polite">{authError}</p>}
           <p className="font-body text-xs text-stone-400 text-center mt-4">
-            Forgot your secret animals? Ask your teacher, they can reset it from the File Box.
+            Name not recognized? Go back and choose New Student instead.
           </p>
           <div className="flex items-center justify-center gap-3 mt-6">
             <BigButton variant="ghost" onClick={() => setMode("student-choice")}>
@@ -2536,10 +2461,9 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, bilingual, 
                 setAuthLoading(true);
                 setAuthError(null);
                 try {
-                  const data = await studentSignup(studentId.trim(), authSecret, avatarConfig);
+                  const data = await studentSignup(studentId.trim(), avatarConfig);
                   onStudentAuthenticated(data.token, data.expiresAt, data.student);
                   setPendingSignup(false);
-                  setAuthSecret([]);
                   onBegin(studentId.trim(), avatarConfig, passageId, SESSION_WORD_COUNT);
                 } catch (e) {
                   setAuthError(e.message || "Couldn't create the account, please try again");
@@ -3101,112 +3025,11 @@ function CloseConfirmModal({ onCancel, onConfirm, screen, studentId }) {
   );
 }
 
-// Teacher-mediated recovery for a student who forgot their secret animals
-// (see resetStudentSecret): reuses SecretAnimalPicker so picking the new
-// sequence looks identical to signup/login, just from the teacher's
-// device. Unlike CloseConfirmModal's 2-button focus trap, this dialog has
-// many focusable controls (8 animal buttons plus Cancel/Confirm), so the
-// trap here cycles through every focusable element inside the dialog
-// rather than hardcoding first/last refs.
-function ResetSecretModal({ student, onCancel, onReset, demoMode }) {
-  const [secret, setSecret] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const dialogRef = useRef(null);
-
-  useEffect(() => {
-    dialogRef.current?.querySelector("button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])")?.focus();
-  }, []);
-
-  useEffect(() => {
-    const onKeyDown = (e) => {
-      if (e.key === "Escape") { onCancel(); return; }
-      if (e.key !== "Tab" || !dialogRef.current) return;
-      const focusable = Array.from(
-        dialogRef.current.querySelectorAll("button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])")
-      ).filter((el) => !el.disabled);
-      if (focusable.length === 0) return;
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault();
-        last.focus();
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault();
-        first.focus();
-      }
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [onCancel]);
-
-  async function handleConfirm() {
-    if (secret.length !== SECRET_LENGTH || loading) return;
-    SFX.click();
-    setLoading(true);
-    setError(null);
-    if (demoMode) {
-      setTimeout(() => { setLoading(false); onReset(); }, 350);
-      return;
-    }
-    try {
-      await resetStudentSecret(student.id, secret);
-      onReset();
-    } catch (e) {
-      setError(e.message || "Couldn't reset the secret, please try again");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  // Portal straight to document.body: this modal is opened from inside
-  // FileBoxScreen's own root div, which carries the "step-in" entrance
-  // animation class. That animation's keyframes set a (non-"none")
-  // transform, and per CSS spec any element with a transform becomes the
-  // containing block for its `position: fixed` descendants — so without
-  // the portal, "fixed inset-0" below would size itself to FileBoxScreen's
-  // own max-w-2xl column instead of the real viewport, leaving the
-  // backdrop as a dark rectangle in the middle of the screen instead of
-  // covering it edge to edge.
-  return createPortal(
-    <div className="fixed inset-0 flex items-center justify-center p-6" style={{ zIndex: 1000 }}>
-      <div className="absolute inset-0" style={{ background: "rgba(41,37,36,0.55)", backdropFilter: "blur(4px)" }} onClick={onCancel} aria-hidden="true" />
-      <div
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="reset-secret-heading"
-        className="relative bg-white p-6 sm:p-8 text-center max-w-sm w-full step-in"
-        style={CARD_NEUTRAL}
-      >
-        <p className="text-4xl mb-3">🔑</p>
-        <p id="reset-secret-heading" className="font-display font-800 text-xl text-stone-700 mb-2">
-          Reset {student.fullName}'s secret
-        </p>
-        <p className="font-body text-sm text-stone-500 mb-5">
-          Pick 3 new secret animals with {student.fullName} right now, then have them log in with these instead of the old ones.
-        </p>
-        <SecretAnimalPicker value={secret} onChange={setSecret} />
-        {error && <p className="font-body text-xs text-rose-600 text-center mt-4" aria-live="polite">{error}</p>}
-        <div className="flex items-center justify-center gap-3 mt-6">
-          <BigButton variant="ghost" onClick={onCancel} disabled={loading}>
-            Cancel
-          </BigButton>
-          <BigButton onClick={handleConfirm} disabled={secret.length !== SECRET_LENGTH || loading}>
-            {loading ? "Saving…" : "Set new secret"}
-          </BigButton>
-        </div>
-      </div>
-    </div>,
-    document.body
-  );
-}
-
 // Generic "are you sure" dialog for a permanent, irreversible delete —
 // used by the File Box for both deleting one session and deleting a whole
 // student account (see FileBoxScreen). Only two focusable controls
 // (Cancel/Confirm), so this reuses CloseConfirmModal's simpler 2-ref tab
-// trap rather than ResetSecretModal's generic multi-element one.
+// trap.
 function ConfirmDeleteModal({ heading, message, confirmLabel = "Yes, delete", onCancel, onConfirm }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -3259,10 +3082,10 @@ function ConfirmDeleteModal({ heading, message, confirmLabel = "Yes, delete", on
     if (!loading) onCancel();
   }
 
-  // Portal straight to document.body — same reasoning as ResetSecretModal
-  // above: this is opened from inside FileBoxScreen's "step-in"-classed
-  // root div, whose entrance-animation transform would otherwise trap
-  // "fixed inset-0" to that div's own bounds instead of the real viewport.
+  // Portal straight to document.body: this is opened from inside
+  // FileBoxScreen's "step-in"-classed root div, whose entrance-animation
+  // transform would otherwise trap "fixed inset-0" to that div's own
+  // bounds instead of the real viewport.
   return createPortal(
     <div className="fixed inset-0 flex items-center justify-center p-6" style={{ zIndex: 1000 }}>
       <div className="absolute inset-0" style={{ background: "rgba(41,37,36,0.55)", backdropFilter: "blur(4px)" }} onClick={handleBackdropClick} aria-hidden="true" />
@@ -7614,8 +7437,8 @@ function TeacherGuideScreen({ onBack }) {
       </Section>
 
       <Section icon="🧑‍🎓" title="Student accounts">
-        <p>Once the device is unlocked, each student signs up once with their full name and picks 3 secret animals in order — that's their "password" for logging back in next time. It's deliberately simple (kid-friendly, not a real password) and kept separate from the animal companion shown on screen during play, so a classmate watching them play can't read it off the screen.</p>
-        <p>A returning student re-enters both to pick up where they left off, with their same coach and look already set.</p>
+        <p>Once the device is unlocked, each student signs up once with just their full name — no password to remember. The database already keeps names unique per access code, so two students never collide.</p>
+        <p>A returning student re-enters the same name to pick up where they left off, with their same coach and look already set.</p>
       </Section>
 
       <Section icon="🗺️" title="Playing a session">
@@ -7655,7 +7478,7 @@ function TeacherGuideScreen({ onBack }) {
 
       <Section icon="🗃️" title="The File Box">
         <p>Every student who's signed up under your access code shows up here, with their full session history — reachable any time from the main menu, not just right after a student finishes playing. Open a student to see their past sessions, and open a session to see its full report again.</p>
-        <p>Two small icons sit next to each student: <b>🔑 Reset secret</b> lets you set new secret animals with a student right there if they've forgotten theirs, no need to know the old ones. <b>🗑️ Delete</b> permanently removes that student and every one of their sessions — useful for clearing out a test account or a duplicate signup. The same 🗑️ delete also appears next to each individual session, for removing just one session without touching the rest of a student's history. Both deletes ask you to confirm first, and neither can be undone once confirmed, so use them deliberately.</p>
+        <p>A <b>🗑️ Delete</b> icon next to each student permanently removes that student and every one of their sessions — useful for clearing out a test account or a duplicate signup. The same 🗑️ delete also appears next to each individual session, for removing just one session without touching the rest of a student's history. Both deletes ask you to confirm first, and neither can be undone once confirmed, so use them deliberately.</p>
       </Section>
 
       <Section icon="🗂️" title="Classes">
@@ -7837,8 +7660,6 @@ function FileBoxScreen({ onBack, onCreateTargetedPassage }) {
   const [sessionDetail, setSessionDetail] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState(null);
-  const [resetTarget, setResetTarget] = useState(null); // roster entry currently being secret-reset, or null
-  const [resetSuccessName, setResetSuccessName] = useState(null);
   const [deleteStudentTarget, setDeleteStudentTarget] = useState(null); // roster entry pending delete confirmation, or null
   const [deleteSessionTarget, setDeleteSessionTarget] = useState(null); // session pending delete confirmation, or null
 
@@ -8390,22 +8211,6 @@ function FileBoxScreen({ onBack, onCreateTargetedPassage }) {
           </div>
         );
       })()}
-      {resetSuccessName && (
-        <div
-          className="flex items-center justify-between gap-2 mb-3 px-4 py-2.5 rounded-2xl bg-emerald-50 relative z-10"
-          style={{ border: "2px solid #34d399" }}
-          aria-live="polite"
-        >
-          <p className="font-body text-xs text-emerald-700">✅ New secret set for {resetSuccessName}. They can log in with it now.</p>
-          <button
-            onClick={() => setResetSuccessName(null)}
-            className="font-body text-xs text-emerald-700 underline shrink-0"
-            aria-label="Dismiss"
-          >
-            Dismiss
-          </button>
-        </div>
-      )}
       <div className="flex flex-col gap-2.5 relative z-10">
         {roster?.map((s) => (
           <div key={s.id} className="flex items-center gap-2">
@@ -8433,16 +8238,7 @@ function FileBoxScreen({ onBack, onCreateTargetedPassage }) {
               ))}
             </select>
             <button
-              onClick={() => { SFX.tap(); setResetSuccessName(null); setResetTarget(s); }}
-              className="shrink-0 w-11 h-11 rounded-full bg-white flex items-center justify-center text-base"
-              style={{ border: "2px solid #e7e5e4", boxShadow: "0 1px 3px rgba(0,0,0,0.1)" }}
-              title={`Reset ${s.fullName}'s secret`}
-              aria-label={`Reset ${s.fullName}'s secret`}
-            >
-              🔑
-            </button>
-            <button
-              onClick={() => { SFX.tap(); setResetSuccessName(null); setDeleteStudentTarget(s); }}
+              onClick={() => { SFX.tap(); setDeleteStudentTarget(s); }}
               className="shrink-0 w-11 h-11 rounded-full bg-white flex items-center justify-center text-base"
               style={{ border: "2px solid #e7e5e4", boxShadow: "0 1px 3px rgba(0,0,0,0.1)" }}
               title={`Delete ${s.fullName}'s account`}
@@ -8453,15 +8249,6 @@ function FileBoxScreen({ onBack, onCreateTargetedPassage }) {
           </div>
         ))}
       </div>
-
-      {resetTarget && (
-        <ResetSecretModal
-          student={resetTarget}
-          onCancel={() => setResetTarget(null)}
-          onReset={() => { setResetSuccessName(resetTarget.fullName); setResetTarget(null); }}
-          demoMode={demoModeActive}
-        />
-      )}
 
       {deleteStudentTarget && (
         <ConfirmDeleteModal

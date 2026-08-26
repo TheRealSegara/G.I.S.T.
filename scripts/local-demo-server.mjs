@@ -28,7 +28,7 @@ const TOKEN_TTL_MINUTES = 720;
 let nextStudentId = 1;
 let nextSessionId = 1;
 let nextClassId = 1;
-const students = []; // { id, fullName, fullNameKey, secret, avatarConfig, label, classId }
+const students = []; // { id, fullName, fullNameKey, avatarConfig, label, classId }
 const sessions = []; // { id, studentId, passageTitle, passageEmoji, startedAt, finishedAt, comprehensionResult, diagnosticReport, log }
 const classes = []; // { id, name, label }
 let quotaUsedToday = 0;
@@ -63,14 +63,14 @@ app.post("/api/student-auth", (req, res) => {
   const claims = verifyToken(teacherToken, SECRET);
   if (!claims) return res.status(401).json({ error: "Missing or expired access token", tokenInvalid: true });
 
-  const { mode, fullName, secret, avatarConfig, studentId } = req.body || {};
+  const { mode, fullName, avatarConfig } = req.body || {};
   const nameKey = (fullName || "").trim().toLowerCase();
 
   if (mode === "signup") {
     if (students.some((s) => s.label === claims.label && s.fullNameKey === nameKey)) {
       return res.status(409).json({ error: "That name is already registered. Try Returning Student instead." });
     }
-    const student = { id: String(nextStudentId++), fullName: fullName.trim(), fullNameKey: nameKey, secret, avatarConfig, label: claims.label, createdAt: new Date().toISOString(), lastLoginAt: null, classId: null };
+    const student = { id: String(nextStudentId++), fullName: fullName.trim(), fullNameKey: nameKey, avatarConfig, label: claims.label, createdAt: new Date().toISOString(), lastLoginAt: null, classId: null };
     students.push(student);
     const exp = Date.now() + TOKEN_TTL_MINUTES * 60_000;
     const stToken = signToken({ kind: "student", studentId: student.id, label: claims.label, exp }, SECRET);
@@ -79,20 +79,13 @@ app.post("/api/student-auth", (req, res) => {
 
   if (mode === "login") {
     const student = students.find((s) => s.label === claims.label && s.fullNameKey === nameKey);
-    if (!student || JSON.stringify(student.secret) !== JSON.stringify(secret)) {
-      return res.status(401).json({ error: "Name or secret animals not recognized. Ask your teacher, or sign up as a new student." });
+    if (!student) {
+      return res.status(404).json({ error: "That name isn't registered yet. Try New Student instead.", studentNotFound: true });
     }
     student.lastLoginAt = new Date().toISOString();
     const exp = Date.now() + TOKEN_TTL_MINUTES * 60_000;
     const stToken = signToken({ kind: "student", studentId: student.id, label: claims.label, exp }, SECRET);
     return res.status(200).json({ token: stToken, expiresAt: exp, student: { id: student.id, fullName: student.fullName, avatarConfig: student.avatarConfig } });
-  }
-
-  if (mode === "reset") {
-    const student = students.find((s) => s.id === studentId && s.label === claims.label);
-    if (!student) return res.status(404).json({ error: "Student not found" });
-    student.secret = secret;
-    return res.status(200).json({ ok: true });
   }
 
   return res.status(400).json({ error: "Invalid mode" });

@@ -162,12 +162,12 @@ const mockScript = String.raw`
         if (pathname === "/api/student-auth" && method === "POST") {
           var claims2 = getClaims(headersInit);
           if (!claims2) { resolve(jsonResponse(401, { error: "Missing or expired access token", tokenInvalid: true })); return; }
-          var mode = body.mode, fullName = body.fullName, secret = body.secret, avatarConfig = body.avatarConfig, studentId = body.studentId;
+          var mode = body.mode, fullName = body.fullName, avatarConfig = body.avatarConfig;
           var nameKey = (fullName || "").trim().toLowerCase();
           if (mode === "signup") {
             var dup = students.some(function (s) { return s.label === claims2.label && s.fullNameKey === nameKey; });
             if (dup) { resolve(jsonResponse(409, { error: "That name is already registered. Try Returning Student instead." })); return; }
-            var student = { id: String(nextStudentId++), fullName: fullName.trim(), fullNameKey: nameKey, secret: secret, avatarConfig: avatarConfig, label: claims2.label, createdAt: new Date().toISOString(), lastLoginAt: null, classId: null };
+            var student = { id: String(nextStudentId++), fullName: fullName.trim(), fullNameKey: nameKey, avatarConfig: avatarConfig, label: claims2.label, createdAt: new Date().toISOString(), lastLoginAt: null, classId: null };
             students.push(student);
             var stToken = makeToken({ kind: "student", studentId: student.id, label: claims2.label });
             var stClaims = readToken(stToken);
@@ -176,18 +176,11 @@ const mockScript = String.raw`
           }
           if (mode === "login") {
             var found2 = students.find(function (s) { return s.label === claims2.label && s.fullNameKey === nameKey; });
-            if (!found2 || JSON.stringify(found2.secret) !== JSON.stringify(secret)) { resolve(jsonResponse(401, { error: "Name or secret animals not recognized. Ask your teacher, or sign up as a new student." })); return; }
+            if (!found2) { resolve(jsonResponse(404, { error: "That name isn't registered yet. Try New Student instead.", studentNotFound: true })); return; }
             found2.lastLoginAt = new Date().toISOString();
             var stToken2 = makeToken({ kind: "student", studentId: found2.id, label: claims2.label });
             var stClaims2 = readToken(stToken2);
             resolve(jsonResponse(200, { token: stToken2, expiresAt: stClaims2.exp, student: { id: found2.id, fullName: found2.fullName, avatarConfig: found2.avatarConfig } }));
-            return;
-          }
-          if (mode === "reset") {
-            var found3 = students.find(function (s) { return s.id === studentId && s.label === claims2.label; });
-            if (!found3) { resolve(jsonResponse(404, { error: "Student not found" })); return; }
-            found3.secret = secret;
-            resolve(jsonResponse(200, { ok: true }));
             return;
           }
           resolve(jsonResponse(400, { error: "Invalid mode" }));
