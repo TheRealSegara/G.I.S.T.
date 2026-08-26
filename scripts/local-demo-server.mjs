@@ -104,7 +104,7 @@ app.post("/api/session", (req, res) => {
   const claims = verifyToken(token, SECRET);
   if (!claims || claims.kind !== "student") return res.status(403).json({ error: "Only a student session can save progress" });
   const { passageTitle, passageEmoji, startedAt, finishedAt, comprehensionResult, log } = req.body || {};
-  const session = { id: String(nextSessionId++), studentId: claims.studentId, passageTitle, passageEmoji, startedAt, finishedAt, comprehensionResult, diagnosticReport: null, log, teacherNotes: null };
+  const session = { id: String(nextSessionId++), studentId: claims.studentId, passageTitle, passageEmoji, startedAt, finishedAt, comprehensionResult, diagnosticReport: null, log, teacherNotes: null, flaggedWords: [] };
   sessions.push(session);
   return res.status(200).json({ ok: true, sessionId: session.id });
 });
@@ -118,7 +118,7 @@ app.get("/api/session", (req, res) => {
   if (!session) return res.status(404).json({ error: "Session not found" });
   const student = students.find((s) => s.id === session.studentId);
   return res.status(200).json({
-    session: { id: session.id, studentId: session.studentId, studentName: student?.fullName || "Student", passageTitle: session.passageTitle, passageEmoji: session.passageEmoji, startedAt: session.startedAt, finishedAt: session.finishedAt, comprehensionResult: session.comprehensionResult, diagnosticReport: session.diagnosticReport, teacherNotes: session.teacherNotes },
+    session: { id: session.id, studentId: session.studentId, studentName: student?.fullName || "Student", passageTitle: session.passageTitle, passageEmoji: session.passageEmoji, startedAt: session.startedAt, finishedAt: session.finishedAt, comprehensionResult: session.comprehensionResult, diagnosticReport: session.diagnosticReport, teacherNotes: session.teacherNotes, flaggedWords: session.flaggedWords || [] },
     log: session.log || [],
   });
 });
@@ -132,6 +132,7 @@ app.patch("/api/session", (req, res) => {
   if (!session) return res.status(404).json({ error: "Session not found" });
   if (req.body.diagnosticReport !== undefined) session.diagnosticReport = req.body.diagnosticReport;
   if (req.body.teacherNotes !== undefined) session.teacherNotes = req.body.teacherNotes;
+  if (req.body.flaggedWords !== undefined) session.flaggedWords = req.body.flaggedWords;
   return res.status(200).json({ ok: true });
 });
 
@@ -222,6 +223,7 @@ app.get("/api/teacher-roster", (req, res) => {
           wordCount: words.length,
           comprehensionCorrect: s.comprehensionResult?.correct ?? null,
           teacherNotes: s.teacherNotes || null,
+          flaggedWords: s.flaggedWords || [],
           independentCount: solved.filter((w) => w.hintsUsed === 0).length,
           totalCount: solved.length,
         };

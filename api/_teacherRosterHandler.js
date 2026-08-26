@@ -186,7 +186,7 @@ async function fetchStudentSessions(supabase, label, studentId, res) {
 
   const { data: sessions, error: sessionsError } = await supabase
     .from("sessions")
-    .select("id, passage_title, passage_emoji, started_at, finished_at, comprehension_result, teacher_notes, session_words(id, word, clue_type, hints_used, skipped, final_stage, solved_at, prior_knowledge, got_it_via)")
+    .select("id, passage_title, passage_emoji, started_at, finished_at, comprehension_result, teacher_notes, flagged_words, session_words(id, word, clue_type, hints_used, skipped, final_stage, solved_at, prior_knowledge, got_it_via)")
     .eq("student_id", studentId)
     .order("started_at", { ascending: false });
   if (sessionsError) {
@@ -214,6 +214,7 @@ async function fetchStudentSessions(supabase, label, studentId, res) {
         wordCount: words.length,
         comprehensionCorrect: s.comprehension_result?.correct ?? null,
         teacherNotes: s.teacher_notes,
+        flaggedWords: s.flagged_words || [],
         independentCount: solved.filter((w) => w.hints_used === 0).length,
         totalCount: solved.length,
       };

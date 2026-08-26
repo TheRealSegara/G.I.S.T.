@@ -197,7 +197,7 @@ const mockScript = String.raw`
         if (pathname === "/api/session" && method === "POST") {
           var claims3 = getClaims(headersInit);
           if (!claims3 || claims3.kind !== "student") { resolve(jsonResponse(403, { error: "Only a student session can save progress" })); return; }
-          var session = { id: String(nextSessionId++), studentId: claims3.studentId, passageTitle: body.passageTitle, passageEmoji: body.passageEmoji, startedAt: body.startedAt, finishedAt: body.finishedAt, comprehensionResult: body.comprehensionResult, diagnosticReport: null, log: body.log, teacherNotes: null };
+          var session = { id: String(nextSessionId++), studentId: claims3.studentId, passageTitle: body.passageTitle, passageEmoji: body.passageEmoji, startedAt: body.startedAt, finishedAt: body.finishedAt, comprehensionResult: body.comprehensionResult, diagnosticReport: null, log: body.log, teacherNotes: null, flaggedWords: [] };
           sessions.push(session);
           resolve(jsonResponse(200, { ok: true, sessionId: session.id }));
           return;
@@ -211,7 +211,7 @@ const mockScript = String.raw`
           if (!session2) { resolve(jsonResponse(404, { error: "Session not found" })); return; }
           var studentForSession = students.find(function (s) { return s.id === session2.studentId; });
           resolve(jsonResponse(200, {
-            session: { id: session2.id, studentId: session2.studentId, studentName: (studentForSession && studentForSession.fullName) || "Student", passageTitle: session2.passageTitle, passageEmoji: session2.passageEmoji, startedAt: session2.startedAt, finishedAt: session2.finishedAt, comprehensionResult: session2.comprehensionResult, diagnosticReport: session2.diagnosticReport, teacherNotes: session2.teacherNotes },
+            session: { id: session2.id, studentId: session2.studentId, studentName: (studentForSession && studentForSession.fullName) || "Student", passageTitle: session2.passageTitle, passageEmoji: session2.passageEmoji, startedAt: session2.startedAt, finishedAt: session2.finishedAt, comprehensionResult: session2.comprehensionResult, diagnosticReport: session2.diagnosticReport, teacherNotes: session2.teacherNotes, flaggedWords: session2.flaggedWords || [] },
             log: session2.log || []
           }));
           return;
@@ -224,6 +224,7 @@ const mockScript = String.raw`
           if (!session3) { resolve(jsonResponse(404, { error: "Session not found" })); return; }
           if (body.diagnosticReport !== undefined) session3.diagnosticReport = body.diagnosticReport;
           if (body.teacherNotes !== undefined) session3.teacherNotes = body.teacherNotes;
+          if (body.flaggedWords !== undefined) session3.flaggedWords = body.flaggedWords;
           resolve(jsonResponse(200, { ok: true }));
           return;
         }
@@ -261,6 +262,7 @@ const mockScript = String.raw`
                   wordCount: words.length,
                   comprehensionCorrect: s.comprehensionResult ? (s.comprehensionResult.correct === undefined ? null : s.comprehensionResult.correct) : null,
                   teacherNotes: s.teacherNotes || null,
+                  flaggedWords: s.flaggedWords || [],
                   independentCount: solved.filter(function (w) { return w.hintsUsed === 0; }).length,
                   totalCount: solved.length,
                 };

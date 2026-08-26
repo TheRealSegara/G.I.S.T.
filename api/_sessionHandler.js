@@ -22,7 +22,8 @@ const LOG_ENTRY_ALLOWED_KEYS = [
   "word", "clueType", "concreteness", "finalStage", "hintsUsed", "skipped", "skipReason", "revealedMeaning",
   "priorKnowledge", "gotItVia", "clueIdentified", "transferPassed", "timeToAnswerSec", "minGateSec", "solvedAt", "passageTitle", "funFact",
 ];
-const PATCH_ALLOWED_KEYS = ["sessionId", "diagnosticReport", "teacherNotes"];
+const PATCH_ALLOWED_KEYS = ["sessionId", "diagnosticReport", "teacherNotes", "flaggedWords"];
+const MAX_FLAGGED_WORDS = MAX_WORDS_PER_SESSION;
 
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_REQUESTS = 30;
@@ -198,7 +199,7 @@ async function handleFetch(req, res, claims) {
 
   const { data: session, error: sessionError } = await supabase
     .from("sessions")
-    .select("id, passage_title, passage_emoji, started_at, finished_at, comprehension_result, diagnostic_report, teacher_notes, students!inner(id, full_name, access_code_label)")
+    .select("id, passage_title, passage_emoji, started_at, finished_at, comprehension_result, diagnostic_report, teacher_notes, flagged_words, students!inner(id, full_name, access_code_label)")
     .eq("id", sessionId)
     .single();
   if (sessionError || !session || session.students.access_code_label !== claims.label) {
@@ -226,6 +227,7 @@ async function handleFetch(req, res, claims) {
       comprehensionResult: session.comprehension_result,
       diagnosticReport: session.diagnostic_report,
       teacherNotes: session.teacher_notes,
+      flaggedWords: session.flagged_words || [],
     },
     log: words.map((w) => ({
       word: w.word,
@@ -255,13 +257,14 @@ async function handlePatch(req, res, claims) {
   if (!isPlainObjectWithOnlyKeys(req.body, PATCH_ALLOWED_KEYS)) {
     return res.status(400).json({ error: "Missing or unexpected fields in request body" });
   }
-  const { sessionId, diagnosticReport, teacherNotes } = req.body;
+  const { sessionId, diagnosticReport, teacherNotes, flaggedWords } = req.body;
   if (typeof sessionId !== "string" || !sessionId) {
     return res.status(400).json({ error: "Missing sessionId" });
   }
   const hasDiagnosticReport = diagnosticReport !== undefined;
   const hasTeacherNotes = teacherNotes !== undefined;
-  if (!hasDiagnosticReport && !hasTeacherNotes) {
+  const hasFlaggedWords = flaggedWords !== undefined;
+  if (!hasDiagnosticReport && !hasTeacherNotes && !hasFlaggedWords) {
     return res.status(400).json({ error: "Nothing to update" });
   }
   if (hasDiagnosticReport && (!diagnosticReport || typeof diagnosticReport !== "object" || Array.isArray(diagnosticReport))) {
@@ -272,6 +275,13 @@ async function handlePatch(req, res, claims) {
   // fields (funFact/revealedMeaning) elsewhere in this file.
   if (hasTeacherNotes && teacherNotes !== null && !isValidShortString(teacherNotes, MAX_FREE_TEXT)) {
     return res.status(400).json({ error: "Invalid teacher notes" });
+  }
+  // Words a teacher flagged for re-teaching, replaced wholesale each save
+  // (the client always sends its full current set, same idiom as
+  // teacherNotes replacing the whole free-text field rather than patching
+  // it) -- capped at the same per-session word ceiling as the log itself.
+  if (hasFlaggedWords && (!Array.isArray(flaggedWords) || flaggedWords.length > MAX_FLAGGED_WORDS || !flaggedWords.every((w) => isValidShortString(w, 100)))) {
+    return res.status(400).json({ error: "Invalid flagged words" });
   }
 
   const supabase = getSupabase();
@@ -291,6 +301,7 @@ async function handlePatch(req, res, claims) {
   const update = {};
   if (hasDiagnosticReport) update.diagnostic_report = diagnosticReport;
   if (hasTeacherNotes) update.teacher_notes = teacherNotes;
+  if (hasFlaggedWords) update.flagged_words = flaggedWords;
   const { error: updateError } = await supabase.from("sessions").update(update).eq("id", sessionId);
   if (updateError) {
     return res.status(502).json({ error: "Couldn't save that, please try again" });

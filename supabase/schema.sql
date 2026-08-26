@@ -71,10 +71,21 @@ create table if not exists sessions (
   finished_at timestamptz,
   comprehension_result jsonb,
   diagnostic_report jsonb,
-  teacher_notes text
+  teacher_notes text,
+  -- Words a teacher has flagged for re-teaching from this session's
+  -- report, e.g. ["sturdy", "anxious"]. Lowercase-free-form, matched
+  -- against session_words.word the same loose way the rest of the app
+  -- already compares words (case-insensitive), not a foreign key -- a
+  -- flag survives even if the underlying word row is ever removed.
+  flagged_words jsonb not null default '[]'::jsonb
 );
 
 create index if not exists sessions_student_id_idx on sessions (student_id);
+
+-- Added after the table already existed in earlier deployments; see the
+-- students.class_id column above for the same idempotent-migration
+-- pattern. Defaults every already-existing session to an empty list.
+alter table sessions add column if not exists flagged_words jsonb not null default '[]'::jsonb;
 
 -- One row per target word attempted within a session. Mirrors the shape
 -- of the in-memory `log` entries in src/App.jsx (see handleWordResolved).

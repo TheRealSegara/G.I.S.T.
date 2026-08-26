@@ -1170,6 +1170,13 @@ async function saveTeacherNotes(sessionId, teacherNotes) {
   return apiRequest("/api/session", { method: "PATCH", token: currentAuthToken, body: { sessionId, teacherNotes } });
 }
 
+// Words a teacher has flagged for re-teaching directly from a session's
+// word-log table -- replaces the whole set each call, same idiom as
+// teacherNotes replacing the whole free-text field above.
+async function saveFlaggedWords(sessionId, flaggedWords) {
+  return apiRequest("/api/session", { method: "PATCH", token: currentAuthToken, body: { sessionId, flaggedWords } });
+}
+
 // Permanently deletes one session (and its word log, via the DB's own
 // cascade) — for a teacher pruning a single bad/test session without
 // touching the rest of that student's history.
@@ -5418,6 +5425,24 @@ const CLUE_TYPE_INFO = [
   { type: "inference", emoji: "🧩", label: "Inference clues", desc: "There's no direct clue word — the meaning has to be pieced together from the whole scene.", example: "He tiptoed past the sleeping dog, careful not to wake it." },
 ];
 
+// A per-clue-type breakdown used to just be a line of text ("contrast
+// clues: 2/3 independent") -- the same counted fraction, everywhere it's
+// shown (this session's At a Glance, and the all-time Clue-Type Mastery
+// in History), as a small bar instead, so the gap reads visually instead
+// of requiring the fraction to be read and compared by eye.
+function ClueTypeBar({ type, independent, total, colorClass, trackClass }) {
+  const pct = total > 0 ? Math.round((independent / total) * 100) : 0;
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-xs font-body capitalize w-16 shrink-0">{type}</span>
+      <div className={`flex-1 h-2 rounded-full overflow-hidden ${trackClass}`}>
+        <div className={`h-full rounded-full ${colorClass}`} style={{ width: `${pct}%` }} />
+      </div>
+      <span className="text-xs font-body shrink-0 tabular-nums">{independent}/{total}</span>
+    </div>
+  );
+}
+
 // Always visible, its own box -- not a click-to-reveal toggle. A teacher
 // shouldn't have to know to go looking for "contrast"/"inference" clue
 // definitions; they should just be sitting on the page. Rendered once per
@@ -5652,6 +5677,12 @@ const SAMPLE_PAST_SESSIONS = [
     teacherNotes: "Tried a quick group activity on spotting indirect clues after this session — noticeably faster the next time.",
     independentCount: 4,
     totalCount: 5,
+    // Demonstrates the flag-for-reteaching pill on a past session's list
+    // row -- "fragrant" is the one word this session that actually needed
+    // a hint (see SAMPLE_PAST_SESSION_2_SUMMARY's corePattern/whatToTry
+    // above), so flagging it is the same word the AI-written text already
+    // points a teacher at, not an arbitrary pick.
+    flaggedWords: ["fragrant"],
     _demoLog: SAMPLE_PAST_SESSION_2_LOG,
     _demoDiagnosticReport: SAMPLE_PAST_SESSION_2_SUMMARY,
     _demoWhatToTry: SAMPLE_PAST_SESSION_2_SUMMARY.whatToTry,
@@ -6296,7 +6327,7 @@ function DiagnosticReportSkeleton() {
   );
 }
 
-function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log, onBack, onReset, sessionStartedAt, comprehensionResult, isDemo = false, initialSummary = null, onDiagnosticGenerated = null, hideResetSection = false, classPattern = null, selfComputeClassPattern = false, onCreateTargetedPassage = null, initialStudentStats = null, initialPastSessions = null, initialWordHistory = null, initialCalibration = null, onOpenFileBox = null }) {
+function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log, onBack, onReset, sessionStartedAt, comprehensionResult, isDemo = false, initialSummary = null, onDiagnosticGenerated = null, hideResetSection = false, classPattern = null, selfComputeClassPattern = false, onCreateTargetedPassage = null, initialStudentStats = null, initialPastSessions = null, initialWordHistory = null, initialCalibration = null, onOpenFileBox = null, initialFlaggedWords = [] }) {
   const demoModeActive = useDemoMode();
 
   // Only the live "just finished" report (selfComputeClassPattern) needs
@@ -6401,6 +6432,7 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
           comprehensionResult: null,
           diagnosticReport: session._demoDiagnosticReport || null,
           teacherNotes: session.teacherNotes,
+          flaggedWords: session.flaggedWords || [],
         },
         log: session._demoLog || [],
       });
@@ -6464,6 +6496,27 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
 
   const [teacherNotes, setTeacherNotes] = useState("");
   const quotaStatus = useQuotaStatus();
+
+  // Words flagged for re-teaching directly from the word-log table below.
+  // Re-synced off sessionId (not just seeded once) because the outer
+  // TeacherScreen reuses this same component for whichever past session is
+  // currently opened via viewingSessionId/File Box -- without this, a
+  // second session opened right after a first would keep showing the
+  // first one's flags until a full remount happened to occur.
+  const [flaggedWords, setFlaggedWords] = useState(initialFlaggedWords || []);
+  useEffect(() => { setFlaggedWords(initialFlaggedWords || []); }, [sessionId]);
+  async function toggleWordFlag(word) {
+    SFX.tap();
+    const key = word.toLowerCase();
+    const next = flaggedWords.includes(key) ? flaggedWords.filter((w) => w !== key) : [...flaggedWords, key];
+    setFlaggedWords(next);
+    // Sample report: sessionId is a fake id with no real row to PATCH, and
+    // a live Demo Mode session never gets a real sessionId in the first
+    // place (nothing is saved) -- either way this stays a local-only
+    // toggle rather than attempting a network call that would just 404.
+    if (!sessionId || isDemo) return;
+    try { await saveFlaggedWords(sessionId, next); } catch (e) { /* best-effort, same philosophy as the rest of this bonus panel */ }
+  }
 
   // Click-to-evidence: a word tapped inside the AI-written report jumps to
   // and briefly highlights that word's own row in the log table below, so
@@ -6585,6 +6638,7 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
           // still the same student's same overall pattern either way.
           classPattern={effectiveClassPattern}
           onCreateTargetedPassage={onCreateTargetedPassage}
+          initialFlaggedWords={viewingDetail.session.flaggedWords || []}
         />
       );
     }
@@ -6840,14 +6894,6 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
                 </div>
               )}
               <p className="font-body text-[11px] text-blue-600 mt-2">🔢 Counted directly from each student's logged history, not AI</p>
-              {onCreateTargetedPassage && (
-                <button
-                  onClick={() => { SFX.tap(); onCreateTargetedPassage(effectiveClassPattern.type); }}
-                  className="mt-3 font-display font-700 text-xs text-white bg-blue-600 hover:bg-blue-700 rounded-full px-4 py-2"
-                >
-                  🧭 Create a targeted passage →
-                </button>
-              )}
             </div>
           )}
 
@@ -6903,14 +6949,34 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
                 </p>
               )}
               {glance.breakdown.length > 0 && (
-                <div className="mt-3 pt-3 border-t border-blue-200 space-y-1">
+                <div className="mt-3 pt-3 border-t border-blue-200 space-y-1.5 text-blue-800">
                   {glance.breakdown.map((b) => (
-                    <div key={b.type} className="flex justify-between text-xs font-body text-blue-800 capitalize">
-                      <span>{b.type} clues</span><span>{b.independent}/{b.total} independent</span>
-                    </div>
+                    <ClueTypeBar key={b.type} type={b.type} independent={b.independent} total={b.total} colorClass="bg-blue-600" trackClass="bg-blue-100" />
                   ))}
                 </div>
               )}
+              {/* Session-over-session delta: At a Glance only ever showed
+                  this session's own counts, never how they compare to the
+                  immediately previous one -- otherSessions[0] (newest-first,
+                  current session already excluded) already carries
+                  independentCount/totalCount from the same roster fetch
+                  hasHistory itself depends on, so no extra request needed. */}
+              {hasHistory && otherSessions[0] && otherSessions[0].totalCount > 0 && (() => {
+                const priorRate = Math.round((otherSessions[0].independentCount / otherSessions[0].totalCount) * 100);
+                const sessionSolved = glance.independent + glance.withHelp;
+                if (sessionSolved === 0) return null;
+                const currentRate = Math.round((glance.independent / sessionSolved) * 100);
+                const delta = currentRate - priorRate;
+                const arrow = delta > 0 ? "📈" : delta < 0 ? "📉" : "➡️";
+                return (
+                  <div className="mt-3 pt-3 border-t border-blue-200">
+                    <p className="text-xs font-display font-700 text-blue-800">{arrow} Since last session</p>
+                    <p className="text-xs font-body text-blue-700">
+                      <b>{currentRate}%</b> independent this time ({glance.independent}/{sessionSolved}) — {delta === 0 ? "same as" : delta > 0 ? "up from" : "down from"} <b>{priorRate}%</b> ({otherSessions[0].independentCount}/{otherSessions[0].totalCount}) last session.
+                    </p>
+                  </div>
+                );
+              })()}
               {wordHistory && (() => {
                 // Word-retention (item 1): real evidence of growth over
                 // time -- a repeat word this session that landed at an
@@ -6935,6 +7001,17 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
                   </div>
                 );
               })()}
+              {/* All-time recurring words: the full list (every past
+                  encounter, oldest to newest) only ever showed up inside
+                  the History toggle, gated at 2+ sessions -- a one-line
+                  teaser here surfaces the headline before a teacher has to
+                  find and click that toggle at all. */}
+              {recurringWords.length > 0 && (
+                <p className="mt-3 pt-3 border-t border-blue-200 text-xs font-body text-blue-700">
+                  🔁 {recurringWords.slice(0, 2).map(([word, h]) => `"${word}" (seen ${h.length}×)`).join(", ")}
+                  {recurringWords.length > 2 ? `, +${recurringWords.length - 2} more` : ""} — full history below.
+                </p>
+              )}
             </div>
 
             <div className="p-5 rounded-3xl" style={{ background: "#dbeafe", border: "3px solid #2563eb" }}>
@@ -6942,7 +7019,28 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
               <p className="font-body text-sm text-blue-900 mb-2">
                 Comprehension check: {comprehensionResult && comprehensionResult.ran ? (comprehensionResult.correct ? <b>Correct ✓</b> : <b>Incorrect ✗</b>) : <i>Not run this session</i>}
               </p>
+              {/* The actual question, not just the pass/fail badge -- this
+                  was already sitting unused on comprehensionResult. */}
+              {comprehensionResult && comprehensionResult.ran && comprehensionResult.question && (
+                <div className="mb-2 p-2.5 rounded-xl bg-white" style={{ border: "2px solid #93c5fd" }}>
+                  <p className="font-body text-xs text-blue-700">"{comprehensionResult.question}"</p>
+                </div>
+              )}
               <BoldText text={summary.storyUnderstandingNote} className="font-body text-sm leading-relaxed text-blue-900" />
+              {/* Deterministic (not AI) tie-back: a missed whole-passage
+                  check is more actionable when it's connected to which
+                  specific words this same session already struggled with,
+                  rather than left as an isolated pass/fail. Correlation,
+                  named as such -- not claimed as the definite cause. */}
+              {comprehensionResult && comprehensionResult.ran && !comprehensionResult.correct && (() => {
+                const struggledWords = log.filter((e) => e.skipped || e.hintsUsed > 0).map((e) => e.word);
+                if (struggledWords.length === 0) return null;
+                return (
+                  <p className="font-body text-xs text-blue-700 mt-2 pt-2 border-t border-blue-200">
+                    🔢 Worth noting: this session also needed help with {struggledWords.join(", ")} — word-level gaps like these often line up with a missed comprehension check.
+                  </p>
+                );
+              })()}
             </div>
           </div>
 
@@ -6985,25 +7083,30 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
                 </p>
                 <RichReportText text={summary.whatToTry} className="text-amber-900" boldColorClass="text-amber-950 font-800" linkWords={log.map((e) => e.word)} onWordClick={jumpToWordRow} />
               </div>
+            </div>
+          )}
 
-              {/* 4. Suggested Next Step: the one actionable follow-up, not
-                  buried behind the separate History toggle (unlike the
-                  card this replaced) and not gated on 2+ tracked sessions
-                  either -- nextStepWeakest falls back to THIS session's
-                  own breakdown, so even a first-ever session gets one. */}
-              {nextStepWeakest && (
-                <div className="p-6 rounded-3xl" style={{ background: "#ede9fe", border: "4px solid #7c3aed" }}>
-                  <p className="font-display font-800 text-xs uppercase tracking-wide text-violet-800 mb-2">🧭 Suggested Next Step</p>
-                  <p className="font-body text-sm text-violet-900 leading-relaxed mb-3">
-                    Since <b className="capitalize">{nextStepWeakest.type}</b>-clue words have been {studentId}'s biggest gap{historyWeakest ? " across their sessions" : " today"}, try a passage built specifically around <b className="capitalize">{nextStepWeakest.type}</b> clues to build on this practice.
-                  </p>
-                  <button
-                    onClick={() => { SFX.tap(); onCreateTargetedPassage?.(nextStepWeakest.type); }}
-                    className="font-display font-700 text-xs text-white bg-violet-600 hover:bg-violet-700 rounded-full px-4 py-2"
-                  >
-                    🧭 Create a targeted passage →
-                  </button>
-                </div>
+          {/* Suggested Next Step: the one actionable follow-up. Always
+              visible, not gated behind "See full details" -- a teacher
+              acting on this shouldn't need to know it's hiding behind a
+              toggle first. Was previously duplicated here AND inside the
+              Class Pattern card above; now there's exactly one button, one
+              place, regardless of which card (if any) surfaced the same
+              gap. nextStepWeakest falls back to THIS session's own
+              breakdown, so even a first-ever session gets one. */}
+          {nextStepWeakest && (
+            <div className="p-6 rounded-3xl" style={{ background: "#ede9fe", border: "4px solid #7c3aed" }}>
+              <p className="font-display font-800 text-xs uppercase tracking-wide text-violet-800 mb-2">🧭 Suggested Next Step</p>
+              <p className="font-body text-sm text-violet-900 leading-relaxed mb-3">
+                Since <b className="capitalize">{nextStepWeakest.type}</b>-clue words have been {studentId}'s biggest gap{historyWeakest ? " across their sessions" : " today"}, try a passage built specifically around <b className="capitalize">{nextStepWeakest.type}</b> clues to build on this practice.
+              </p>
+              {onCreateTargetedPassage && (
+                <button
+                  onClick={() => { SFX.tap(); onCreateTargetedPassage(nextStepWeakest.type); }}
+                  className="font-display font-700 text-xs text-white bg-violet-600 hover:bg-violet-700 rounded-full px-4 py-2"
+                >
+                  🧭 Create a targeted passage →
+                </button>
               )}
             </div>
           )}
@@ -7046,11 +7149,9 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
                 {studentStats.breakdown.length > 0 && (
                   <div className="p-4 rounded-2xl bg-white" style={{ border: "3px solid #4f46e5" }}>
                     <p className="font-display font-800 text-xs uppercase tracking-wide text-indigo-800 mb-2">📊 Clue-Type Mastery (All-Time)</p>
-                    <div className="space-y-1">
+                    <div className="space-y-1.5 text-indigo-800">
                       {studentStats.breakdown.map((b) => (
-                        <div key={b.type} className="flex justify-between text-xs font-body text-indigo-800 capitalize">
-                          <span>{b.type} clues</span><span>{b.independent}/{b.total} independent</span>
-                        </div>
+                        <ClueTypeBar key={b.type} type={b.type} independent={b.independent} total={b.total} colorClass="bg-indigo-600" trackClass="bg-indigo-100" />
                       ))}
                     </div>
                     {/* Item 9: metacognitive calibration -- how well this
@@ -7101,6 +7202,7 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
                             <p className="font-body text-xs text-indigo-600">
                               {new Date(s.finishedAt).toLocaleDateString()} · {s.wordCount} word{s.wordCount === 1 ? "" : "s"}
                               {s.comprehensionCorrect !== null ? ` · comprehension ${s.comprehensionCorrect ? "✓" : "✗"}` : ""}
+                              {s.flaggedWords && s.flaggedWords.length > 0 ? ` · 🚩 ${s.flaggedWords.length} flagged` : ""}
                             </p>
                             {/* Same follow-up note FileBoxScreen's own session
                                 list already shows -- this History card is
@@ -7145,11 +7247,12 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
                   <th className="font-display font-700 text-[11px] uppercase tracking-wide text-stone-500 px-4 py-3">Clue Type</th>
                   <th className="font-display font-700 text-[11px] uppercase tracking-wide text-stone-500 px-4 py-3">Stage Reached</th>
                   <th className="font-display font-700 text-[11px] uppercase tracking-wide text-stone-500 px-4 py-3">Hints</th>
+                  <th className="font-display font-700 text-[11px] uppercase tracking-wide text-stone-500 px-4 py-3">Re-teach</th>
                 </tr>
               </thead>
               <tbody>
                 {log.length === 0 && (
-                  <tr><td colSpan={showMapColumn ? 5 : 4} className="px-4 py-8 text-center font-hand text-lg text-stone-500">No words logged yet. Have the student solve a few words first!</td></tr>
+                  <tr><td colSpan={showMapColumn ? 6 : 5} className="px-4 py-8 text-center font-hand text-lg text-stone-500">No words logged yet. Have the student solve a few words first!</td></tr>
                 )}
                 {log.map((entry, i) => (
                   <tr
@@ -7167,6 +7270,24 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
                     <td className="px-4 py-3 font-body text-xs text-stone-600 capitalize">{entry.clueType}</td>
                     <td className="px-4 py-3 font-body text-xs text-stone-600">{entry.finalStage} — {stageLabelFor(entry.finalStage, entry, i)}</td>
                     <td className="px-4 py-3 font-body text-xs text-stone-600">{entry.hintsUsed}</td>
+                    <td className="px-4 py-3">
+                      {/* Turns an in-the-moment read of the report into a
+                          saved action without leaving the page -- persists
+                          via toggleWordFlag, which is what makes this show
+                          up again later in File Box/History's session
+                          list (see the flagged-words pill there). */}
+                      <button
+                        type="button"
+                        onClick={() => toggleWordFlag(entry.word)}
+                        aria-pressed={flaggedWords.includes(entry.word.toLowerCase())}
+                        title={flaggedWords.includes(entry.word.toLowerCase()) ? "Flagged for re-teaching -- tap to unflag" : "Flag for re-teaching"}
+                        className={`text-lg leading-none rounded-full w-8 h-8 flex items-center justify-center transition-colors ${
+                          flaggedWords.includes(entry.word.toLowerCase()) ? "bg-rose-100" : "opacity-30 hover:opacity-70"
+                        }`}
+                      >
+                        🚩
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -7704,6 +7825,7 @@ function FileBoxScreen({ onBack, onCreateTargetedPassage }) {
           comprehensionResult: session.comprehensionCorrect === null ? null : { correct: session.comprehensionCorrect },
           diagnosticReport: session._demoDiagnosticReport || null,
           teacherNotes: session.teacherNotes,
+          flaggedWords: session.flaggedWords || [],
         },
         log: session._demoLog || [],
       });
@@ -7737,6 +7859,7 @@ function FileBoxScreen({ onBack, onCreateTargetedPassage }) {
           classPattern={detailStudent ? classPatternFor(detailStudent) : null}
           onCreateTargetedPassage={onCreateTargetedPassage}
           isDemo={demoModeActive}
+          initialFlaggedWords={sessionDetail.session.flaggedWords || []}
         />
       );
     }
@@ -7795,6 +7918,7 @@ function FileBoxScreen({ onBack, onCreateTargetedPassage }) {
                   <p className="font-body text-xs text-stone-500">
                     {new Date(s.finishedAt).toLocaleDateString()} · {s.wordCount} word{s.wordCount === 1 ? "" : "s"}
                     {s.comprehensionCorrect !== null ? ` · comprehension ${s.comprehensionCorrect ? "✓" : "✗"}` : ""}
+                    {s.flaggedWords && s.flaggedWords.length > 0 ? ` · 🚩 ${s.flaggedWords.length} flagged` : ""}
                   </p>
                   {s.teacherNotes && <p className="font-body text-xs text-violet-600 mt-0.5">📝 {s.teacherNotes}</p>}
                 </div>
