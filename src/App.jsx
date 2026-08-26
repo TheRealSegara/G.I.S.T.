@@ -4900,7 +4900,7 @@ function buildReportHtml(studentId, log, summary, extra = {}) {
     : "";
 
   const concretenessHtml = concretenessBreakdown.length >= 2
-    ? `<div class="evidence blue"><h3>🧩 Concrete vs Abstract</h3><p>${concretenessBreakdown.map((b) => `${escapeHtml(b.type)}: ${b.independent}/${b.total} independent`).join(" · ")}</p></div>`
+    ? `<div class="evidence blue"><h3>🧩 Concrete vs Abstract</h3><p>${concretenessBreakdown.map((b) => `${escapeHtml(b.type)}: ${b.independent}/${b.total} independent`).join(" · ")}</p><p><em>Concrete: something you can see or touch (e.g. "gecko"). Abstract: a quality, feeling, or idea (e.g. "brave").</em></p></div>`
     : "";
 
   const suggestedNextStepHtml = nextStepWeakest
@@ -6648,12 +6648,23 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
   }
 
   const glance = computeAtAGlance(log);
-  // History section content -- only meaningful once there's at least one
-  // OTHER finished session to compare against (studentStats.sessionCount
+  // History content -- only meaningful once there's at least one OTHER
+  // finished session to compare against (studentStats.sessionCount
   // includes this very session once it's saved, so ">= 2" is the real
-  // "there IS history" floor, same threshold the relocated cards already
-  // used before they lived under this toggle).
-  const hasHistory = !hideResetSection && studentStats && studentStats.sessionCount >= 2;
+  // "there IS history" floor). Deliberately NOT gated on hideResetSection:
+  // that flag only exists to stop the History TOGGLE SECTION from nesting
+  // inside itself when a past session is opened from History or File Box
+  // (see canShowHistoryToggle below) -- it says nothing about whether this
+  // student actually has multiple sessions, so folding it into hasHistory
+  // used to also silently hide Growth Over Time/Recurring Words on every
+  // session opened via File Box or History, even for students with real
+  // multi-session history.
+  const hasHistory = studentStats && studentStats.sessionCount >= 2;
+  // Only the toggle/panel that lists every past session gets suppressed
+  // when nested -- Growth Over Time and Recurring Words above stay keyed
+  // to hasHistory alone, since they're a fixed-size summary, not something
+  // that could recursively re-open more sessions.
+  const canShowHistoryToggle = hasHistory && !hideResetSection;
   const otherSessions = hasHistory ? (pastSessions || []).filter((s) => s.id !== sessionId) : [];
   const recurringWords = hasHistory && wordHistory
     ? Object.entries(wordHistory)
@@ -7037,7 +7048,7 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
                 {recurringWords.slice(0, 3).map(([word, h]) => `"${word}" (seen ${h.length}×)`).join(", ")}
                 {recurringWords.length > 3 ? `, +${recurringWords.length - 3} more` : ""}.
               </p>
-              {hasHistory && (
+              {canShowHistoryToggle && (
                 <button
                   type="button"
                   onClick={() => { SFX.tap(); setShowHistory(true); }}
@@ -7086,7 +7097,8 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
                     <ClueTypeBar key={b.type} type={b.type} independent={b.independent} total={b.total} colorClass="bg-blue-600" trackClass="bg-blue-100" />
                   ))}
                 </div>
-                <p className="font-body text-[11px] text-blue-600 mt-3">🔢 Counted directly from the log, not AI</p>
+                <p className="font-body text-[11px] text-blue-500 italic mt-2">Concrete: something you can see or touch (e.g. "gecko"). Abstract: a quality, feeling, or idea (e.g. "brave").</p>
+                <p className="font-body text-[11px] text-blue-600 mt-1">🔢 Counted directly from the log, not AI</p>
               </div>
             );
           })()}
@@ -7158,7 +7170,7 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
             </div>
           )}
 
-          {hasHistory && (
+          {canShowHistoryToggle && (
             <div className="text-center">
               <button
                 onClick={() => { SFX.tap(); setShowHistory((s) => !s); }}
@@ -7169,7 +7181,7 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
             </div>
           )}
 
-          {hasHistory && showHistory && (() => {
+          {canShowHistoryToggle && showHistory && (() => {
             const chronological = [...(pastSessions || [])].slice().reverse();
             const earliest = chronological[0];
             const sessionSolved = glance.independent + glance.withHelp;
