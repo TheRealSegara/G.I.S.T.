@@ -87,6 +87,34 @@ const FontImport = () => (
     .answer-settle {
       transition: opacity 0.25s ease, transform 0.25s ease;
     }
+    /* The coach's chat card used to auto-hide its scrollbar (the OS
+       default on trackpads/macOS) and stretch to fill the screen
+       regardless of how little a given exchange actually contained,
+       leaving a scroll affordance nobody could see and a lot of blank
+       card below short answers. overflow-y: scroll (not auto) keeps this
+       track permanently visible/reachable rather than only-on-hover, and
+       dropping the box's forced stretch (see coach-scrollbox usage
+       below) lets its height follow its content instead. */
+    .coach-scrollbox {
+      scrollbar-width: thin;
+      scrollbar-color: #f59e0b #fef3c7;
+    }
+    .coach-scrollbox::-webkit-scrollbar {
+      width: 12px;
+    }
+    .coach-scrollbox::-webkit-scrollbar-track {
+      background: #fef3c7;
+      border-radius: 999px;
+      margin: 4px 0;
+    }
+    .coach-scrollbox::-webkit-scrollbar-thumb {
+      background: #f59e0b;
+      border-radius: 999px;
+      border: 2px solid #fef3c7;
+    }
+    .coach-scrollbox::-webkit-scrollbar-thumb:hover {
+      background: #d97706;
+    }
   `}</style>
 );
 
@@ -3353,6 +3381,13 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onSkip
   const hintsUsedRef = useRef(0);
   const exchangeCountRef = useRef(0);
   const scrollRef = useRef(null);
+  // Visible scroll-position indicator for the chat card, drawn ourselves
+  // rather than relying on the OS scrollbar: real classrooms use a mix of
+  // trackpads (auto-hiding scrollbar) and tablets (no scrollbar at all),
+  // so a student can easily miss that there's more to scroll to. null
+  // means the card's content currently fits without scrolling, so nothing
+  // is drawn.
+  const [scrollThumb, setScrollThumb] = useState(null);
   const [showSettings, setShowSettings] = useState(false);
   // skipWord defers onWordResolved by 2.2s so the student has time to read
   // the reveal message. If they tap Back (or the parent otherwise unmounts
@@ -3525,9 +3560,34 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onSkip
     }, 2200);
   }
 
+  // Recomputes the custom scroll-thumb's size/position from the box's
+  // actual scroll metrics. Called on scroll, and whenever the content
+  // driving the box's height changes (new message, reflection step,
+  // slide switch) since those can flip it between fitting and overflowing
+  // without the student ever scrolling.
+  function updateScrollThumb() {
+    const el = scrollRef.current;
+    if (!el) return;
+    const { scrollTop, scrollHeight, clientHeight } = el;
+    if (scrollHeight <= clientHeight + 1) {
+      setScrollThumb(null);
+      return;
+    }
+    const heightPct = Math.max(12, (clientHeight / scrollHeight) * 100);
+    const maxScroll = scrollHeight - clientHeight;
+    const topPct = maxScroll > 0 ? (scrollTop / maxScroll) * (100 - heightPct) : 0;
+    setScrollThumb({ heightPct, topPct });
+  }
+
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-  }, [display, postPhase, transferData, activeSlide]);
+    updateScrollThumb();
+    // answersLocked/answersEnabled are included because the answer options
+    // themselves don't mount until the lock clears (see appendCoachMessage)
+    // -- without them, the box's real (taller, with options) height is
+    // never re-measured, so a long options list can silently overflow
+    // with the thumb still reporting "fits, nothing to scroll".
+  }, [display, postPhase, transferData, activeSlide, answersLocked, answersEnabled]);
 
   const slideGroups = groupMessagesByExchange(display);
   const isLatestSlide = activeSlide === slideGroups.length - 1;
@@ -3955,9 +4015,13 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onSkip
         </div>
 
         {/* Single unified box */}
+        <div className="relative">
         <div
           ref={scrollRef}
-          className="flex-1 overflow-y-auto bg-white p-5 sm:p-7 space-y-3"
+          onScroll={updateScrollThumb}
+          tabIndex={0}
+          aria-label="Coach conversation"
+          className="coach-scrollbox overflow-y-scroll bg-white p-5 sm:p-7 space-y-3"
           style={{ ...CARD_GOLD, maxHeight: "calc(100dvh - 225px)" }}
         >
           {prePhase === "prior" && (
@@ -4358,6 +4422,19 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onSkip
               )}
             </>
           )}
+        </div>
+        {scrollThumb && (
+          <div
+            aria-hidden="true"
+            className="absolute right-1.5 top-2 bottom-2 w-1.5 rounded-full pointer-events-none"
+            style={{ background: "#fef3c7" }}
+          >
+            <div
+              className="absolute left-0 right-0 rounded-full transition-[top] duration-100"
+              style={{ background: "#f59e0b", top: `${scrollThumb.topPct}%`, height: `${scrollThumb.heightPct}%` }}
+            />
+          </div>
+        )}
         </div>
 
         {/* Slide navigation: one flashcard per exchange instead of a
