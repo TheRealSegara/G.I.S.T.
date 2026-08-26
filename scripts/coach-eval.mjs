@@ -7,10 +7,11 @@
 // endpoint the app itself calls, and asserts the same content-level
 // invariants added to `validateCoachResponse` in src/App.jsx: no MCQ option
 // is the target word itself, word_bank/letter_connect tiles are exactly the
-// target word's own letters, tap_select options are real words from the
-// sentence (never hallucinated), and reverse_clue options are real OTHER
-// sentences copied verbatim from the passage (never the target word's own
-// sentence, never invented).
+// target word's own letters, tap_select is an odd-one-out among exactly 4
+// single words that always includes the target word (but never as the
+// answer), and reverse_clue options are real OTHER sentences copied
+// verbatim from the passage (never the target word's own sentence, never
+// invented).
 //
 // NOTE: the validation logic below is a standalone copy of the same
 // checks in src/App.jsx's validateCoachResponse (that file is JSX, not
@@ -53,12 +54,6 @@ function tilesMatchWord(tiles, targetWord) {
 }
 function stripPunctForCompare(s) {
   return String(s).toLowerCase().replace(/[.,!?;:"'()]/g, "").trim();
-}
-function optionInSentence(option, sentence) {
-  const cleanOption = stripPunctForCompare(option);
-  if (!cleanOption) return false;
-  const sentenceWords = stripPunctForCompare(sentence).split(/\s+/);
-  return sentenceWords.includes(cleanOption);
 }
 function splitIntoSentences(text) {
   return (String(text).match(/[^.!?]+[.!?]+/g) || [text]).map((s) => s.trim()).filter(Boolean);
@@ -126,11 +121,20 @@ function checkInvariants(parsed, targetWord, passageText) {
   if ((parsed.input_type === "word_bank" || parsed.input_type === "letter_connect") && !tilesMatchWord(parsed.word_tiles, targetWord)) {
     violations.push(`word_tiles don't match "${targetWord}": ${JSON.stringify(parsed.word_tiles)}`);
   }
+  // tap_select is now an odd-one-out among exactly 4 single words -- the
+  // target word must be one of the 3 that "belong" (never the answer
+  // itself, or recognizing the header word would trivially solve it again).
   if (parsed.input_type === "tap_select" && Array.isArray(parsed.options)) {
-    const bad = parsed.options.filter((opt) => !optionInSentence(opt, parsed.display_sentence));
-    if (bad.length) violations.push(`option(s) not actually in display_sentence: ${JSON.stringify(bad)} (sentence: "${parsed.display_sentence}")`);
-    if (parsed.options.length < 3 || parsed.options.length > 6) {
-      violations.push(`tap_select has ${parsed.options.length} options, expected 3-6: ${JSON.stringify(parsed.options)}`);
+    if (parsed.options.length !== 4) {
+      violations.push(`tap_select has ${parsed.options.length} options, expected exactly 4: ${JSON.stringify(parsed.options)}`);
+    }
+    const notSingleWords = parsed.options.filter((opt) => !/^\S+$/.test(String(opt).trim()));
+    if (notSingleWords.length) violations.push(`tap_select option(s) aren't single words: ${JSON.stringify(notSingleWords)}`);
+    if (!parsed.options.some((opt) => isTargetWordMatch(opt, targetWord))) {
+      violations.push(`tap_select options don't include the target word "${targetWord}": ${JSON.stringify(parsed.options)}`);
+    }
+    if (isTargetWordMatch(parsed.correct_answer, targetWord)) {
+      violations.push(`tap_select's correct_answer is the target word itself (the header gives it away): "${parsed.correct_answer}"`);
     }
   }
   // reverse_clue now asks the student to pick a whole OTHER sentence from

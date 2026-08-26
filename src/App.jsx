@@ -681,7 +681,7 @@ const STAGE_INSTRUCTIONS = {
 const INPUT_TYPE_INSTRUCTIONS = {
   mcq: { icon: "👉", text: "Pick the best answer" },
   true_false: { icon: "🤔", text: "True or false?" },
-  tap_select: { icon: "👆", text: "Tap the wrong word" },
+  tap_select: { icon: "👆", text: "Tap the word that doesn't belong" },
   word_bank: { icon: "🔤", text: "Tap the letters to spell it" },
   letter_connect: { icon: "🔗", text: "Connect the letters to spell it" },
   reverse_clue: { icon: "🕵️", text: "Tap the sentence that explains it" },
@@ -1267,16 +1267,6 @@ function stripPunctForCompare(s) {
   return String(s).toLowerCase().replace(/[.,!?;:"'()]/g, "").trim();
 }
 
-// tap_select options are supposed to be display_sentence's own words, split
-// individually — confirms an option isn't a hallucinated token that never
-// actually appeared in the sentence.
-function optionInSentence(option, sentence) {
-  const cleanOption = stripPunctForCompare(option);
-  if (!cleanOption) return false;
-  const sentenceWords = stripPunctForCompare(sentence).split(/\s+/);
-  return sentenceWords.includes(cleanOption);
-}
-
 // Splits a full passage into its individual sentences. Shared by
 // reverse_clue's validation (below) and PassageScreen's own reveal-by-
 // sentence logic — same regex, kept in one place rather than duplicated.
@@ -1363,7 +1353,9 @@ function validateCoachResponse(parsed, targetWordText, passageText) {
   if (COACH_TYPES_NEEDING_OPTIONS.has(parsed.input_type)) {
     if (!Array.isArray(parsed.options) || parsed.options.length < 2) return false;
     if (parsed.input_type === "true_false" && parsed.options.length !== 2) return false;
-    if (parsed.input_type === "tap_select" && (parsed.options.length < 3 || parsed.options.length > 6)) return false;
+    // tap_select is now an odd-one-out among exactly 4 single words (the
+    // target word plus 3 more), not a 3-6 subset of a sentence's words.
+    if (parsed.input_type === "tap_select" && parsed.options.length !== 4) return false;
     // reverse_clue's options are now 3 full sentences (one explanatory,
     // two real-but-wrong), not a 3-6 range of single words.
     if (parsed.input_type === "reverse_clue" && parsed.options.length !== 3) return false;
@@ -1398,7 +1390,14 @@ function validateCoachResponse(parsed, targetWordText, passageText) {
     return false;
   }
   if (parsed.input_type === "tap_select" && Array.isArray(parsed.options)) {
-    if (!parsed.options.every((opt) => optionInSentence(opt, parsed.display_sentence))) return false;
+    // Odd-one-out: every option must be a single word (no phrases), the
+    // target word must be one of the 3 that "belong" (never the answer
+    // itself -- that would make the header a giveaway again), and the
+    // group must actually contain the target word so recognizing it
+    // never helps find the odd one out.
+    if (!parsed.options.every((opt) => /^\S+$/.test(String(opt).trim()))) return false;
+    if (!parsed.options.some((opt) => isTargetWordMatch(opt, targetWordText))) return false;
+    if (isTargetWordMatch(parsed.correct_answer, targetWordText)) return false;
   }
   if (parsed.input_type === "reverse_clue" && Array.isArray(parsed.options) && passageText) {
     // Every option must be a real, unmodified sentence copied from the
@@ -4313,27 +4312,20 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onSkip
               {isLatestSlide && postPhase === null && !loading && current && (() => {
                 const raw = (current.display_sentence && current.display_sentence.trim()) || contextSentence;
                 const blank = current.stage === 2;
-                // Stage 3 tap_select/text show the word used WRONG on
-                // purpose, for the student to spot -- auto-bolding it
-                // amber (the normal "here's the target word" treatment)
-                // would visually point straight at the mistake before
-                // they've even looked, undermining the actual task. Only
-                // reverse_clue keeps the highlight, since its sentence
-                // uses the word correctly and pointing it out doesn't
-                // give away its answer (a different word, the clue).
-                const wrongUsage = current.stage === 3 && current.input_type !== "reverse_clue";
                 // The box's whole point differs by task -- a plain example
                 // (Stage 1/4/5), a memory test with the word hidden (Stage
-                // 2), a "something's off, find it" prompt (Stage 3
-                // tap_select/text), or a "read closely for the clue" prompt
-                // (Stage 3 reverse_clue) -- so it shouldn't wear the same
-                // teal costume every time. Colors reuse INPUT_TYPE_ACCENT
+                // 2), an "odd word out" prompt (Stage 3 tap_select), or a
+                // "read closely for the clue" prompt (Stage 3 reverse_clue)
+                // -- so it shouldn't wear the same teal costume every time.
+                // Every stage now shows the word used CORRECTLY here (no
+                // mechanic needs a "wrong" sentence anymore), so the word
+                // is always safe to auto-bold. Colors reuse INPUT_TYPE_ACCENT
                 // so this box, the instruction badge, and the chip options
                 // below all agree on one color per mechanic.
                 const boxTheme = blank
                   ? { border: "#a8a29e", shadow: "#78716c", label: " — word hidden, this stage tests recall!", labelClass: "text-stone-600" }
-                  : wrongUsage
-                  ? { border: INPUT_TYPE_ACCENT.tap_select.border, shadow: INPUT_TYPE_ACCENT.tap_select.shadow, label: " — something's off here, can you spot it?", labelClass: "text-amber-700" }
+                  : current.input_type === "tap_select"
+                  ? { border: INPUT_TYPE_ACCENT.tap_select.border, shadow: INPUT_TYPE_ACCENT.tap_select.shadow, label: " — think about what the word means", labelClass: "text-amber-700" }
                   : current.input_type === "reverse_clue"
                   ? { border: INPUT_TYPE_ACCENT.reverse_clue.border, shadow: INPUT_TYPE_ACCENT.reverse_clue.shadow, label: " — the answer is elsewhere in the passage", labelClass: "text-teal-700" }
                   : { border: "#0d9488", shadow: "#0f766e", label: "", labelClass: "text-teal-700" };
@@ -4346,19 +4338,17 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onSkip
                       📖 From the passage{boxTheme.label}
                     </p>
                     <p className="font-body text-lg sm:text-xl text-stone-800 italic leading-snug font-700">
-                      {wrongUsage
-                        ? raw
-                        : raw.split(new RegExp(`(${targetWord.word})`, "i")).map((part, i) =>
-                            part.toLowerCase() === targetWord.word.toLowerCase() ? (
-                              blank ? (
-                                <strong key={i} className="text-stone-500 not-italic tracking-widest">▬▬▬▬▬</strong>
-                              ) : (
-                                <strong key={i} className="text-amber-700 not-italic font-800">{part}</strong>
-                              )
-                            ) : (
-                              <span key={i}>{part}</span>
-                            )
-                          )}
+                      {raw.split(new RegExp(`(${targetWord.word})`, "i")).map((part, i) =>
+                        part.toLowerCase() === targetWord.word.toLowerCase() ? (
+                          blank ? (
+                            <strong key={i} className="text-stone-500 not-italic tracking-widest">▬▬▬▬▬</strong>
+                          ) : (
+                            <strong key={i} className="text-amber-700 not-italic font-800">{part}</strong>
+                          )
+                        ) : (
+                          <span key={i}>{part}</span>
+                        )
+                      )}
                     </p>
                   </div>
                 );

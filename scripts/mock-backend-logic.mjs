@@ -38,6 +38,47 @@ const CORE_WORDS = {
   tiny: { meaning: "Very small", distractors: ["Very large", "Very loud", "Very old"], hint: "The passage compares the computer's size to your hand." },
 };
 
+// tap_select's odd-one-out (Stage 3): 2 real synonyms that belong with the
+// target word, plus 1 word that clearly doesn't (an antonym or unrelated
+// quality) -- that odd word is the correct_answer. The target word itself
+// is always added as a 4th, 3rd-"belonging" option by the caller below, so
+// this table only needs to hold the other 3.
+const ODD_ONE_OUT = {
+  reluctant: { belongs: ["hesitant", "unwilling"], odd: "eager" },
+  enormous: { belongs: ["huge", "gigantic"], odd: "tiny" },
+  curious: { belongs: ["inquisitive", "interested"], odd: "bored" },
+  damp: { belongs: ["moist", "wet"], odd: "dry" },
+  gentle: { belongs: ["kind", "calm"], odd: "rough" },
+  bustling: { belongs: ["busy", "lively"], odd: "quiet" },
+  delighted: { belongs: ["pleased", "happy"], odd: "upset" },
+  fragrant: { belongs: ["sweet", "perfumed"], odd: "smelly" },
+  exhausted: { belongs: ["tired", "weary"], odd: "energetic" },
+  generous: { belongs: ["giving", "kind"], odd: "selfish" },
+  brave: { belongs: ["fearless", "bold"], odd: "scared" },
+  camouflage: { belongs: ["disguise", "cover"], odd: "spotlight" },
+  timid: { belongs: ["shy", "nervous"], odd: "confident" },
+  clever: { belongs: ["smart", "bright"], odd: "foolish" },
+  playful: { belongs: ["fun", "silly"], odd: "serious" },
+  invented: { belongs: ["made", "built"], odd: "destroyed" },
+  powerful: { belongs: ["strong", "mighty"], odd: "weak" },
+  careful: { belongs: ["cautious", "attentive"], odd: "careless" },
+  amazing: { belongs: ["wonderful", "incredible"], odd: "boring" },
+  tiny: { belongs: ["small", "little"], odd: "huge" },
+};
+// Generic fallback for a word not in ODD_ONE_OUT (an EXTENDED_WORDS entry
+// or a Level Maker word) -- borrows a real curated group's "belongs" pair
+// and "odd" word rather than inventing fake ones, same trade-off the MCQ
+// fallback above already makes ("a self-consistent group, not a real
+// relation for THIS word, but doesn't fail outright").
+const ODD_ONE_OUT_KEYS = Object.keys(ODD_ONE_OUT);
+function oddOneOutFor(word) {
+  const curated = ODD_ONE_OUT[word.toLowerCase()];
+  if (curated) return curated;
+  return ODD_ONE_OUT[ODD_ONE_OUT_KEYS[Math.floor(Math.random() * ODD_ONE_OUT_KEYS.length)]];
+}
+
+
+
 // Extended dictionary -- common storybook-register words that a teacher's
 // pasted passage (Level Maker) is likely to actually contain. No fixed
 // "hint" here (there's no fixed passage to reference); instead the hint is
@@ -141,17 +182,6 @@ function shuffleLetters(word) {
     letters[j] = tmp;
   }
   return letters;
-}
-
-// Builds a tap_select/reverse_clue options list guaranteed to satisfy the
-// real frontend's optionInSentence check -- every option is drawn from
-// `tokens` itself (the exact words the caller's display_sentence is built
-// from), never invented separately, so it can never mismatch.
-function pickOptionsFromTokens(tokens, targetToken, count) {
-  const cleaned = tokens.map(function (t) { return t.replace(/[.,!?;:"']/g, ""); }).filter(Boolean);
-  const others = cleaned.filter(function (t) { return t.toLowerCase() !== targetToken.toLowerCase(); });
-  const extra = pickDistinct(others, Math.max(0, count - 1), null);
-  return [targetToken].concat(extra).sort(function () { return Math.random() - 0.5; });
 }
 
 function findLiteralWord(text) {
@@ -469,18 +499,19 @@ function mockClaude(promptId, messages) {
       return { message: message, display_sentence: groundedSentence, input_type: inputType, options: null, word_tiles: shuffleLetters(word), correct_answer: null, sentence_starter: null, stage: 2, grading_reasoning: null, hint_given: hintGiven, resolved: false, fun_fact: null };
     }
 
-    // Stage 3: tap_select (word used WRONG, built from a small fixed
-    // sentence the mock fully controls, so the wrong word and its
-    // options can never mismatch what's actually displayed) or
-    // reverse_clue (word used correctly, grounded in the real passage
-    // sentence when it has enough other words to draw options from,
-    // otherwise the same kind of safe fixed sentence).
+    // Stage 3: tap_select (odd-one-out among 4 single words -- the target
+    // word plus a curated synonym pair, and one word that clearly doesn't
+    // share that meaning, which is correct_answer) or reverse_clue (word
+    // used correctly, grounded in the real passage sentence when it has
+    // enough other words to draw options from, otherwise falls back to
+    // tap_select too, which never depends on passage length at all).
     if (stage === 3) {
       const inputType = word.length % 2 === 0 ? "tap_select" : "reverse_clue";
       if (inputType === "tap_select") {
-        const tokens = ["Somehow", "the", "weather", "felt", word, "again", "today"];
-        const message = hintGiven ? "Not quite, look again!" : "Tap the word that's used wrong!";
-        return { message: message, display_sentence: tokens.join(" ") + ".", input_type: "tap_select", options: pickOptionsFromTokens(tokens, word, 4), word_tiles: null, correct_answer: word, sentence_starter: null, stage: 3, grading_reasoning: null, hint_given: hintGiven, resolved: false, fun_fact: null };
+        const group = oddOneOutFor(word);
+        const message = hintGiven ? "Not quite, think about what it means!" : "Which word doesn't belong?";
+        const options = [word].concat(group.belongs, [group.odd]).sort(function () { return Math.random() - 0.5; });
+        return { message: message, display_sentence: groundedSentence, input_type: "tap_select", options: options, word_tiles: null, correct_answer: group.odd, sentence_starter: null, stage: 3, grading_reasoning: null, hint_given: hintGiven, resolved: false, fun_fact: null };
       }
       // reverse_clue now tests whole-passage comprehension: the student
       // picks which OTHER sentence explains the target word's meaning,
@@ -498,11 +529,12 @@ function mockClaude(promptId, messages) {
         return { message: message, display_sentence: groundedSentence, input_type: "reverse_clue", options: options, word_tiles: null, correct_answer: correctSentence, sentence_starter: null, stage: 3, grading_reasoning: null, hint_given: hintGiven, resolved: false, fun_fact: null };
       }
       // Passage too short to offer 3 genuine OTHER sentences (shouldn't
-      // happen for a real 80-150 word passage) -- fall back to tap_select
-      // rather than risk an option the real validator can't confirm.
-      const fallbackTokens = ["Somehow", "the", "weather", "felt", word, "again", "today"];
-      const fallbackMessage = hintGiven ? "Not quite, look again!" : "Tap the word that's used wrong!";
-      return { message: fallbackMessage, display_sentence: fallbackTokens.join(" ") + ".", input_type: "tap_select", options: pickOptionsFromTokens(fallbackTokens, word, 4), word_tiles: null, correct_answer: word, sentence_starter: null, stage: 3, grading_reasoning: null, hint_given: hintGiven, resolved: false, fun_fact: null };
+      // happen for a real 80-150 word passage) -- fall back to tap_select,
+      // which has no such requirement.
+      const fallbackGroup = oddOneOutFor(word);
+      const fallbackMessage = hintGiven ? "Not quite, think about what it means!" : "Which word doesn't belong?";
+      const fallbackOptions = [word].concat(fallbackGroup.belongs, [fallbackGroup.odd]).sort(function () { return Math.random() - 0.5; });
+      return { message: fallbackMessage, display_sentence: groundedSentence, input_type: "tap_select", options: fallbackOptions, word_tiles: null, correct_answer: fallbackGroup.odd, sentence_starter: null, stage: 3, grading_reasoning: null, hint_given: hintGiven, resolved: false, fun_fact: null };
     }
 
     // Stage 4: finish the sentence. Grading is generous, same as the real
