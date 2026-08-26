@@ -11,6 +11,7 @@ import {
   COMPREHENSION_SYSTEM_PROMPT,
   SINGLE_WORD_REGEN_PROMPT,
   LEVEL_MAKER_SYSTEM_PROMPT,
+  PASSAGE_STARTER_SYSTEM_PROMPT,
   DIAGNOSTIC_SYSTEM_PROMPT,
 } from "../shared/prompts.js";
 import { mockClaude } from "../scripts/mock-backend-logic.mjs";
@@ -762,10 +763,12 @@ G.I.S.T. is an AI vocabulary and reading-comprehension coach for Malaysian prima
 The coach and its report are the core loop, but a real classroom tool needs more around it. These aren't AI calls — they're plain app features worth keeping if you adapt this:
 
 - Classes: a teacher can group their students into classes (e.g. "4A") for roster and rollup purposes. Optional — a student can be in at most one class, or none.
-- Demo Mode: a presenter-facing toggle that swaps every AI call for instant, deterministic scripted replies instead of real ones, with real student signup and session-saving also switched off — a true sandbox, useful for exploring the app or demoing it live with zero API cost and zero waiting. A "skip ahead to the report" shortcut (Demo Mode only) lets a presenter play one word for real, then synthesizes the rest of that session's words with varied profiles and jumps straight to a fully generated report, for fast live demos without grinding through every word.
+- Demo Mode: a presenter-facing toggle that swaps every AI call for instant, deterministic scripted replies instead of real ones, with real student signup and session-saving also switched off — a true sandbox, useful for exploring the app or demoing it live with zero API cost and zero waiting. Also skips the pacing floor entirely (Demo Mode's whole promise is "no waiting between turns"), while a real session keeps it — that pacing signal is load-bearing evidence for real reports, but meaningless for data nobody will ever act on. A "skip ahead to the report" shortcut (Demo Mode only) lets a presenter play one word for real, then synthesizes the rest of that session's words with varied profiles and jumps straight to a fully generated report, for fast live demos without grinding through every word. The File Box roster is Demo-Mode-aware too — it shows a synthetic 3-student class sharing a common clue-type gap, purely in-memory (never a real network call), so a presenter can show off class-wide rollups and shared-pattern grouping without any real students ever having signed up.
 - Cross-session History: a student's report can expand to show trends across every session they've ever finished, not just today's — an independent-solve-rate chart over time, clue-type mastery pooled across all sessions, words that keep recurring and how they went each time, and a list of past sessions to open individually. Deliberately kept separate from today's report (a distinct visual treatment, not just more boxes) and only offered once there's a second session to compare against.
-- Confidence calibration: the app tracks whether a student's own self-report ("I already knew this word") matches what actually happened (did they need a hint, or fail outright) — persistently, across every session, not just flagged once. This becomes a specific, evidence-backed line in the report rather than a vague "the student seems overconfident."
-- Teacher follow-up loop: each report can suggest one concrete next classroom action. The next time that same student plays, the report shows that suggestion again with a small box to log whether it worked — closing the loop instead of generating a new disconnected suggestion every single time.
+- Confidence calibration: the app tracks whether a student's own self-report ("I already knew this word") matches what actually happened (did they need a hint, or fail outright) — persistently, across every session, not just flagged once. This becomes a specific, evidence-backed line in the report rather than a vague "the student seems overconfident." Kept deliberately distinct from the per-session confidence badge below — they're related but different signals, and conflating them under one label would blur two different things a teacher needs to know.
+- Per-session confidence badge: a deterministic High/Medium/Low label on this session's report, computed from answers that landed suspiciously fast and self-report mismatches within just this one session. Shows its own evidence inline ("Why: 2 answers came in almost instantly, 1 word skipped") rather than behind a hover tooltip — tooltips don't reach anyone on a tablet or phone, which is how most of this app's actual audience uses it.
+- Teacher follow-up loop: each report can suggest one concrete next classroom action, tied to whichever clue type is currently that student's weakest ("Suggested Next Step" on their own report; "Class Pattern"/"Shared Patterns" when multiple students share the same gap). The next time that same student plays, the report shows that suggestion again with a small box to log whether it worked — closing the loop instead of generating a new disconnected suggestion every single time. Clicking "Create a targeted passage" from any of these now auto-generates a short starter passage (title + a few sentences) built around that specific clue type, instead of dropping the teacher on a blank textarea — one more AI call in real mode, an instant canned one per clue type in Demo Mode.
+- Clue-type glossary: plain-language definitions of the four context-clue categories (contrast/definition/example/inference), each with a real example sentence, always visible as its own box wherever a report or roster names a clue type — never behind a click-to-reveal toggle, since a teacher shouldn't have to know to go looking for it.
 
 === THE ACTUAL AI PROMPTS ===
 
@@ -787,6 +790,10 @@ ${LEVEL_MAKER_SYSTEM_PROMPT(SESSION_WORD_COUNT)}
 --- SINGLE-WORD REGENERATION (lets a teacher swap out one word the maker picked) ---
 ${SINGLE_WORD_REGEN_PROMPT}
 
+--- STARTER PASSAGE (writes a title + a few sentences for "Create a targeted passage") ---
+Example instantiation (the real prompt is generated per clue type):
+${PASSAGE_STARTER_SYSTEM_PROMPT("inference")}
+
 --- THE DIAGNOSTIC ENGINE (reads the whole finished session, writes the teacher's report) ---
 ${DIAGNOSTIC_SYSTEM_PROMPT}
 
@@ -796,6 +803,7 @@ ${DIAGNOSTIC_SYSTEM_PROMPT}
 - Multiple-choice, true/false, tap-the-mistake, and similar "structured" answer types are checked deterministically by the app's own code, NOT trusted to the AI's judgment — the AI only free-judges answers where there genuinely is no fixed answer key (typed sentences). This exists because an AI grading its own multiple-choice question can be subtly inconsistent; a plain equality check can't.
 - The diagnostic engine is a completely separate AI call from the coach, run only once at the end of a session, reading a structured log rather than the raw conversation — this keeps the report's judgment independent of whatever tone the coach happened to take mid-session.
 - There's a deliberate minimum pacing delay before a student can submit an answer, and the app tracks whether an answer landed suspiciously close to that floor — a signal for "this was a guess," fed into the diagnostic report as evidence, not a hard block.
+- Hints escalate rather than repeat: if a wrong answer already got a hint, the coach is told exactly how many hints this word has already had and instructed to make the next one noticeably more specific (narrowing from "somewhere in the passage" down to one exact sentence), still never stating the meaning directly, right up until the word auto-reveals after too many unproductive tries. A hint's escalation still has to obey the same short-message rules every coach reply follows — a first version that quoted a whole extra sentence blew past that limit and made every escalated turn fail validation, so keep any escalated hint to one short, replacement sentence, never an addition on top of the last one.
 - Every report claim names the specific word and evidence behind it. It never predicts future performance, never suggests reteaching, and always ends in one real, specific next classroom action — it's built to be an assessment tool, not a re-teaching tool, so the teacher stays in control of what happens next.
 - Calibration and cross-session History are counted directly from logged data, deterministically, never left to an AI to eyeball — the diagnostic engine is told these numbers as established fact and writes prose around them, rather than being asked to also do the counting itself.
 
@@ -1824,7 +1832,7 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, bilingual, 
     <div className="text-center mb-4 relative z-10">
       <div className="flex justify-center mb-1"><CompassRose size={84} /></div>
       <h1 className="font-display text-7xl font-800 sticker-title mb-1">G.I.S.T.</h1>
-      <p className="font-hand text-2xl text-amber-800 bg-white inline-block px-4 py-1 -rotate-2" style={{ borderRadius: "40px 8px 40px 8px", border: "2px solid #f59e0b" }}>chart your word-clue adventure!</p>
+      <p className="font-hand text-2xl text-amber-800 bg-white inline-block px-4 py-1 -rotate-2" style={{ borderRadius: "40px 8px 40px 8px", border: "2px solid #f59e0b" }}>Guided Inference Skill Trainer</p>
     </div>
   );
 
@@ -7157,6 +7165,7 @@ function TeacherGuideScreen({ onBack }) {
 
       <Section icon="🗺️" title="Playing a session">
         <p>A student picks a passage, then works through its target vocabulary words one at a time with an AI coach, always guided to work out the meaning from context, never just told the answer. A short comprehension check on the whole passage runs at the end.</p>
+        <p>Hints get sharper the longer a word resists, not just repeated: a first wrong answer gets a gentle pointer, a second gets noticeably more specific, and if it still isn't landing, the word is revealed outright so nobody gets stuck forever — real scaffolding that steps up, rather than the same nudge over and over.</p>
       </Section>
 
       <Section icon="🛠️" title="The custom map maker">
@@ -7166,14 +7175,23 @@ function TeacherGuideScreen({ onBack }) {
       <Section icon="📔" title="The diagnostic report">
         <p>Every word attempt during a session is logged automatically (which word, how many hints it took, whether it was skipped, and more). That log is what actually gets analyzed — nothing about the report is guessed or generic.</p>
         <p>The report opens with a one-line <b>teal Summary</b> and the <b>blue</b> count boxes, counted directly from the log, no AI involved. Tap "See full details" for the rest: the <b>red</b> headline diagnosis (the one thing to take away) and the <b>amber</b> boxes, the AI's written analysis behind it. Each color means exactly this one thing everywhere it appears in the app — blue is always "counted, not AI," red is always the single headline diagnosis, and so on.</p>
+        <p>A "📚 What The Clue Types Mean" box sits near the top of every report and roster view, always visible — plain-language definitions of contrast, definition, example, and inference clues, each with a real example sentence, since the report names these directly ("struggling with definition-clue words") without assuming a teacher already has the term memorized.</p>
+        <p>The 🔒 confidence badge under the Summary shows how much to trust this session's correct answers, with its own reasoning written out right underneath it ("Why: 2 answers came in almost instantly, 1 word skipped") — not just a label, so you don't have to take "Medium confidence" on faith.</p>
+        <p>The downloaded/printed version ("⬇️ Download results") carries the same clue-type glossary and a note distinguishing the AI-written sections from the counted word table, since that file is the one most likely to reach someone — a parent, another teacher — who's never opened the app itself.</p>
       </Section>
 
       <Section icon="📈 " title="Their history across sessions">
         <p>Once a student has a second finished session, their report gets a "▼ See history across sessions" toggle — set apart in <b>indigo</b> so it's never confused with today's numbers above it. It pools their independent-solve rate as a chart over time, clue-type mastery across every session (not just today's handful of words), words that keep recurring and how each attempt went, and a list of past sessions you can open individually.</p>
       </Section>
 
+      <Section icon="🧭" title="Suggested Next Step & Class Patterns">
+        <p>Every report names the specific clue type (contrast, definition, example, or inference) a student is weakest on and suggests building a passage around it. When at least one classmate shares that exact same gap, the report also shows a "🏫 Class Pattern" callout naming who; File Box's roster view rolls this up further into "🔍 Shared Patterns" across everyone, and an "📊 At a Glance" card for the whole class or a chosen group.</p>
+        <p>Clicking "🧭 Create a targeted passage" from any of these no longer drops you on a blank textarea — it writes a short starter passage first (a title plus 3-4 sentences with a real moment of that clue type), ready to edit, extend, or replace outright, so you're never starting from nothing.</p>
+      </Section>
+
       <Section icon="🤔" title="Confidence & calibration">
         <p>Whenever a student says "I already knew this word" before starting, the app remembers what actually happened next — did they land it independently, or need a hint anyway? That comparison builds up across every session, and once there's enough of a sample, the report names it plainly: a student who consistently overestimates what they know, or one who says a word was new but then claims they knew it all along. It's a real, counted pattern, not a guess about the student's attitude.</p>
+        <p>This is a different thing from the 🔒 confidence badge on each individual report (see "The diagnostic report" above) — calibration looks across every session this student has ever played, the badge only judges this one.</p>
       </Section>
 
       <Section icon="📝" title="Following up">
@@ -7194,8 +7212,9 @@ function TeacherGuideScreen({ onBack }) {
       </Section>
 
       <Section icon="🎬" title="Demo Mode">
-        <p>A toggle on the main menu for presenting or exploring without spending real AI calls or creating real student data. With it on, every AI reply is instant and scripted instead of a real network call, and no real student account or session ever gets saved — a genuine sandbox, not just a faster version of the real thing.</p>
+        <p>A toggle on the main menu for presenting or exploring without spending real AI calls or creating real student data. With it on, every AI reply is instant and scripted instead of a real network call, and no real student account or session ever gets saved — a genuine sandbox, not just a faster version of the real thing. It also skips the usual pacing delay between turns entirely, matching its own "no waiting" promise, while a real session keeps that delay since it's part of how real reports judge confidence.</p>
         <p>Inside a Demo Mode session, once you've played one word for real through all 5 stages and answered "How did you get it?", a large "⏩ Skip ahead to the report" button takes over the screen on its own — it fills in the rest of that passage's words with varied (synthesized, clearly not-real) results and jumps straight to a fully generated report, for showing the whole arc in a live demo without playing every single word. It only ever appears after that reflection answer, and never alongside it, so it can't be tapped by accident.</p>
+        <p>File Box works in Demo Mode too, with a synthetic 3-student class ("Sample Student," Aisha, Marcus) sharing a common clue-type gap — enough to show off class-wide rollups and shared-pattern grouping in a live demo, entirely in-memory, with no real students or network calls involved.</p>
       </Section>
     </div>
   );
