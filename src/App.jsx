@@ -661,6 +661,27 @@ const STAGE_LABELS = {
   5: "Free Sentence",
 };
 
+// STAGE_LABELS alone is wrong for two stages: Stage 1 alternates mcq/
+// true_false per word (STAGE1_CYCLE), and Stage 3's real mechanic depends
+// on the word's clueType (reverse_clue for inference, tap_select
+// otherwise -- see the stage3Type rule in CoachScreen), so a single fixed
+// string for either stage is only accurate some of the time. Derives the
+// real mechanic from data every log entry already carries (clueType) plus
+// the entry's own position within its session -- indexInSession must
+// count every entry including skips, matching exactly how the live app
+// assigns wordIndex (see setWordIndex(solvedWords.length) below), so no
+// new field needs to be logged just to get an accurate label.
+function stageLabelFor(finalStage, entry, indexInSession) {
+  if (finalStage === 1) {
+    const stage1Type = STAGE1_CYCLE[(indexInSession || 0) % STAGE1_CYCLE.length];
+    return stage1Type === "true_false" ? "True or False" : "Multiple Choice";
+  }
+  if (finalStage === 3) {
+    return entry && entry.clueType === "inference" ? "Find the Clue Sentence" : "Odd One Out";
+  }
+  return STAGE_LABELS[finalStage];
+}
+
 const STAGE_COLORS = {
   1: "bg-emerald-400",
   2: "bg-teal-400",
@@ -4933,8 +4954,8 @@ function boldToHtml(text) {
 function buildReportHtml(studentId, log, summary) {
   const rows = log
     .map(
-      (e) =>
-        `<tr><td>${escapeHtml(e.word)}</td><td style="text-transform:capitalize">${escapeHtml(e.clueType)}</td><td>${e.finalStage} — ${escapeHtml(STAGE_LABELS[e.finalStage])}</td><td>${e.hintsUsed}</td><td>${e.skipped ? "Skipped" : ""}</td></tr>`
+      (e, i) =>
+        `<tr><td>${escapeHtml(e.word)}</td><td style="text-transform:capitalize">${escapeHtml(e.clueType)}</td><td>${e.finalStage} — ${escapeHtml(stageLabelFor(e.finalStage, e, i))}</td><td>${e.hintsUsed}</td><td>${e.skipped ? "Skipped" : ""}</td></tr>`
     )
     .join("");
   const sections = summary
@@ -6674,6 +6695,7 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
                 <b>{effectiveClassPattern.matchingCount} students</b> in {effectiveClassPattern.className} share this same gap — struggling specifically with <b className="capitalize">{effectiveClassPattern.type}</b>-clue words: {effectiveClassPattern.matchingNames.join(", ")}.
               </p>
               <p className="font-body text-[11px] text-blue-600 mt-2">🔢 Counted directly from each student's logged history, not AI</p>
+              <ClueTypeLegend toneColor="#1e40af" />
             </div>
           )}
 
@@ -6830,6 +6852,7 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
                   >
                     🧭 Create a targeted passage →
                   </button>
+                  <ClueTypeLegend toneColor="#5b21b6" />
                 </div>
               )}
             </div>
@@ -6986,7 +7009,7 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
                     </td>
                     {showMapColumn && <td className="px-4 py-3 font-body text-xs text-stone-600">{entry.passageTitle || "—"}</td>}
                     <td className="px-4 py-3 font-body text-xs text-stone-600 capitalize">{entry.clueType}</td>
-                    <td className="px-4 py-3 font-body text-xs text-stone-600">{entry.finalStage} — {STAGE_LABELS[entry.finalStage]}</td>
+                    <td className="px-4 py-3 font-body text-xs text-stone-600">{entry.finalStage} — {stageLabelFor(entry.finalStage, entry, i)}</td>
                     <td className="px-4 py-3 font-body text-xs text-stone-600">{entry.hintsUsed}</td>
                   </tr>
                 ))}
@@ -7773,6 +7796,7 @@ function FileBoxScreen({ onBack, onCreateTargetedPassage }) {
               )}
             </p>
             <p className="font-body text-[11px] text-blue-600 mt-2">🔢 Counted directly from every logged word, not AI</p>
+            <ClueTypeLegend toneColor="#1e40af" />
           </div>
         );
       })()}
@@ -7796,6 +7820,7 @@ function FileBoxScreen({ onBack, onCreateTargetedPassage }) {
               ))}
             </div>
             <p className="font-body text-[11px] text-violet-600 mt-2">🔢 Counted directly from each student's logged history, not AI</p>
+            <ClueTypeLegend toneColor="#5b21b6" />
           </div>
         );
       })()}
@@ -8147,7 +8172,7 @@ export default function App() {
     setStreakMsg(
       entry.skipped
         ? `👍 No worries, "${entry.word}" is marked for your teacher to help with. On to the next one!`
-        : `🎉 Word #${total} solved! You reached Stage ${entry.finalStage}: ${STAGE_LABELS[entry.finalStage]}.`
+        : `🎉 Word #${total} solved! You reached Stage ${entry.finalStage}: ${stageLabelFor(entry.finalStage, entry, total - 1)}.`
     );
     setActiveWord(null);
     if (passageComplete) {
