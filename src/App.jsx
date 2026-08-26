@@ -5391,26 +5391,22 @@ const CLUE_TYPE_INFO = [
   { type: "inference", emoji: "🧩", label: "Inference clues", desc: "There's no direct clue word — the meaning has to be pieced together from the whole scene.", example: "He tiptoed past the sleeping dog, careful not to wake it." },
 ];
 
-function ClueTypeLegend({ toneColor = "#1e40af" }) {
-  const [open, setOpen] = useState(false);
+// Always visible, its own box -- not a click-to-reveal toggle. A teacher
+// shouldn't have to know to go looking for "contrast"/"inference" clue
+// definitions; they should just be sitting on the page. Rendered once per
+// report/roster (see call sites) rather than repeated inside every card
+// that happens to mention a clue type by name.
+function ClueTypeGlossary() {
   return (
-    <div className="mt-2">
-      <button
-        onClick={() => setOpen((o) => !o)}
-        className="font-body text-[11px] underline decoration-dotted"
-        style={{ color: toneColor, opacity: 0.85 }}
-      >
-        ℹ️ {open ? "Hide clue-type meanings" : "What do these mean?"}
-      </button>
-      {open && (
-        <div className="mt-2 space-y-1.5 step-in">
-          {CLUE_TYPE_INFO.map((info) => (
-            <p key={info.type} className="text-xs leading-snug" style={{ color: toneColor }}>
-              <b>{info.emoji} {info.label}</b> — {info.desc} <i className="opacity-80">"{info.example}"</i>
-            </p>
-          ))}
-        </div>
-      )}
+    <div className="p-5 rounded-3xl step-in" style={{ background: "#f5f5f4", border: "3px solid #a8a29e" }}>
+      <p className="font-display font-800 text-xs uppercase tracking-wide text-stone-600 mb-2">📚 What The Clue Types Mean</p>
+      <div className="space-y-1.5">
+        {CLUE_TYPE_INFO.map((info) => (
+          <p key={info.type} className="font-body text-sm leading-snug text-stone-700">
+            <b>{info.emoji} {info.label}</b> — {info.desc} <i className="opacity-75">"{info.example}"</i>
+          </p>
+        ))}
+      </div>
     </div>
   );
 }
@@ -6725,6 +6721,13 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
             <span className="flex items-center gap-1.5"><i className="inline-block w-3.5 h-3.5 rounded" style={{ background: "#fee2e2", border: "2px solid #dc2626" }} /> Headline diagnosis</span>
           </div>
 
+          {/* Clue-type glossary: always visible, its own box, right up
+              front -- several cards below name a clue type by name
+              (Class Pattern, Suggested Next Step, the breakdowns), so this
+              needs to already be on the page before a teacher reaches any
+              of them, not tucked behind a per-card toggle. */}
+          <ClueTypeGlossary />
+
           {/* Class Pattern: only rendered when at least one classmate
               shares this exact same weakest-clue-type gap (see
               classPatternFor in FileBoxScreen) -- proves this is a real,
@@ -6739,7 +6742,6 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
                 <b>{effectiveClassPattern.matchingCount} students</b> in {effectiveClassPattern.className} share this same gap — struggling specifically with <b className="capitalize">{effectiveClassPattern.type}</b>-clue words: {effectiveClassPattern.matchingNames.join(", ")}.
               </p>
               <p className="font-body text-[11px] text-blue-600 mt-2">🔢 Counted directly from each student's logged history, not AI</p>
-              <ClueTypeLegend toneColor="#1e40af" />
             </div>
           )}
 
@@ -6801,7 +6803,6 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
                       <span>{b.type} clues</span><span>{b.independent}/{b.total} independent</span>
                     </div>
                   ))}
-                  <ClueTypeLegend toneColor="#1e40af" />
                 </div>
               )}
               {wordHistory && (() => {
@@ -6896,7 +6897,6 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
                   >
                     🧭 Create a targeted passage →
                   </button>
-                  <ClueTypeLegend toneColor="#5b21b6" />
                 </div>
               )}
             </div>
@@ -6947,7 +6947,6 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
                         </div>
                       ))}
                     </div>
-                    <ClueTypeLegend toneColor="#3730a3" />
                     {/* Item 9: metacognitive calibration -- how well this
                         student's own self-reports have matched what
                         actually happened, tracked persistently rather
@@ -7705,6 +7704,12 @@ function FileBoxScreen({ onBack, onCreateTargetedPassage }) {
       <h1 className="font-display text-2xl font-800 text-stone-700 mb-1 relative z-10">🗃️ File Box</h1>
       <p className="font-body text-xs text-stone-500 mb-5 relative z-10">Every student who's signed up under this access code, and their past progress.</p>
 
+      {/* Always visible, its own box, not tucked behind a toggle -- the At
+          a Glance and Shared Patterns cards below name clue types directly. */}
+      <div className="relative z-10 mb-5">
+        <ClueTypeGlossary />
+      </div>
+
       {/* Class scope: not every student has to be in a class -- pick "All
           students" (the whole access-code roster), one real class, or
           "Unassigned". The roster list and the At a Glance rollup below
@@ -7840,7 +7845,6 @@ function FileBoxScreen({ onBack, onCreateTargetedPassage }) {
               )}
             </p>
             <p className="font-body text-[11px] text-blue-600 mt-2">🔢 Counted directly from every logged word, not AI</p>
-            <ClueTypeLegend toneColor="#1e40af" />
           </div>
         );
       })()}
@@ -7864,7 +7868,6 @@ function FileBoxScreen({ onBack, onCreateTargetedPassage }) {
               ))}
             </div>
             <p className="font-body text-[11px] text-violet-600 mt-2">🔢 Counted directly from each student's logged history, not AI</p>
-            <ClueTypeLegend toneColor="#5b21b6" />
           </div>
         );
       })()}
