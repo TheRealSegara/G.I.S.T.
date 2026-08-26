@@ -50,7 +50,7 @@ app.post("/api/claude", (req, res) => {
   const claims = verifyToken(token, SECRET);
   if (!claims) return res.status(401).json({ error: "Missing or expired access token", tokenInvalid: true });
   quotaUsedToday += 1;
-  const reply = mockClaude(req.body.promptId || "", req.body.messages || []);
+  const reply = mockClaude(req.body.promptId || "", req.body.messages || [], req.body.params);
   return res.status(200).json({
     content: [{ type: "text", text: JSON.stringify(reply) }],
     quota: { used: quotaUsedToday, limit: 999999, remaining: 999999 - quotaUsedToday, exceeded: false },

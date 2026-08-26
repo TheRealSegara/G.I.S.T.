@@ -77,8 +77,11 @@ const NOUN_FOLLOWERS = "was|is|were|are|felt|seemed|looked|became|grew|helps|hel
 // right after it), not just follow a determiner -- "an enormous orang
 // utan" also has a determiner right before "enormous", but "enormous" is
 // a modifier there, not the head noun.
+const STAGE4_NOUN_OR_VERB_WORDS = new Set(["camouflage", "aroma"]);
 function wordUsedAsNounInText(text, targetWord) {
-  const w = String(targetWord || "").toLowerCase().trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const word = String(targetWord || "").toLowerCase().trim();
+  if (STAGE4_NOUN_OR_VERB_WORDS.has(word)) return true;
+  const w = word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   if (!w || !text) return false;
   return new RegExp(`\\b(${NOUN_DETERMINERS})\\s+${w}\\b(?=\\s*(?:[.,!?;:]|$|(?:${NOUN_FOLLOWERS})\\b))`, "i").test(
     String(text).toLowerCase()

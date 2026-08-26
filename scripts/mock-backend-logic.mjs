@@ -72,9 +72,23 @@ const ODD_ONE_OUT = {
 // relation for THIS word, but doesn't fail outright").
 const ODD_ONE_OUT_KEYS = Object.keys(ODD_ONE_OUT);
 function oddOneOutFor(word) {
-  const curated = ODD_ONE_OUT[word.toLowerCase()];
+  const lower = word.toLowerCase();
+  const curated = ODD_ONE_OUT[lower];
   if (curated) return curated;
-  return ODD_ONE_OUT[ODD_ONE_OUT_KEYS[Math.floor(Math.random() * ODD_ONE_OUT_KEYS.length)]];
+  // A borrowed group whose "odd"/"belongs" words happen to literally BE the
+  // real target word would make correct_answer (or an "options" entry)
+  // match the target word itself -- exactly what tap_select's validator
+  // forbids (the target word must only ever sit among the 3 that belong,
+  // never be the odd one out, and never appear twice). Filter those out
+  // before picking, falling back to the full list only if every single
+  // curated group happens to collide (never true in practice, just a safe
+  // floor against an empty pool).
+  const safeKeys = ODD_ONE_OUT_KEYS.filter((key) => {
+    const group = ODD_ONE_OUT[key];
+    return group.odd !== lower && !group.belongs.includes(lower);
+  });
+  const pool = safeKeys.length > 0 ? safeKeys : ODD_ONE_OUT_KEYS;
+  return ODD_ONE_OUT[pool[Math.floor(Math.random() * pool.length)]];
 }
 
 
@@ -89,25 +103,25 @@ const EXTENDED_WORDS = {
   ancient: { meaning: "Very old, from long ago", distractors: ["Brand new", "Medium-sized", "Recently painted"] },
   narrow: { meaning: "Not wide; thin", distractors: ["Very wide", "Very tall", "Very colourful"] },
   massive: { meaning: "Extremely large", distractors: ["Extremely small", "Extremely quiet", "Extremely old"] },
-  glistening: { meaning: "Shining with a wet or bright light", distractors: ["Completely dark", "Rough to the touch", "Very quiet"] },
+  glistening: { meaning: "Shining with bright light", distractors: ["Completely dark", "Rough to the touch", "Very quiet"] },
   peculiar: { meaning: "Strange or unusual", distractors: ["Completely normal", "Very boring", "Very expensive"] },
   vast: { meaning: "Extremely large in area", distractors: ["Extremely narrow", "Extremely short", "Extremely loud"] },
   weary: { meaning: "Very tired", distractors: ["Full of energy", "Very angry", "Very curious"] },
   cheerful: { meaning: "Happy and bright in mood", distractors: ["Sad and gloomy", "Angry and loud", "Bored and tired"] },
   mysterious: { meaning: "Difficult to explain; secretive", distractors: ["Completely obvious", "Very loud", "Extremely simple"] },
   stubborn: { meaning: "Refusing to change one's mind", distractors: ["Quick to agree", "Easily confused", "Very forgetful"] },
-  graceful: { meaning: "Moving in a smooth, elegant way", distractors: ["Moving clumsily", "Moving very slowly", "Not moving at all"] },
-  clumsy: { meaning: "Awkward in movement; likely to drop things", distractors: ["Very graceful", "Very careful", "Very quiet"] },
+  graceful: { meaning: "Moving smoothly and elegantly", distractors: ["Moving clumsily", "Moving very slowly", "Not moving at all"] },
+  clumsy: { meaning: "Awkward, often drops things", distractors: ["Very graceful", "Very careful", "Very quiet"] },
   eager: { meaning: "Very keen and enthusiastic", distractors: ["Very reluctant", "Very bored", "Very sleepy"] },
   anxious: { meaning: "Feeling worried or nervous", distractors: ["Feeling calm and relaxed", "Feeling proud", "Feeling sleepy"] },
   furious: { meaning: "Extremely angry", distractors: ["Extremely calm", "Extremely happy", "Extremely tired"] },
-  gloomy: { meaning: "Dark and sad in mood or appearance", distractors: ["Bright and cheerful", "Loud and busy", "Fast and exciting"] },
+  gloomy: { meaning: "Dark and sad in mood", distractors: ["Bright and cheerful", "Loud and busy", "Fast and exciting"] },
   vivid: { meaning: "Very bright and clear", distractors: ["Very dull and faint", "Very quiet", "Very old"] },
   faint: { meaning: "Weak; barely noticeable", distractors: ["Extremely strong", "Extremely loud", "Extremely bright"] },
   sturdy: { meaning: "Strongly and solidly built", distractors: ["Easily broken", "Very light", "Very colourful"] },
   fragile: { meaning: "Easily broken or damaged", distractors: ["Very sturdy", "Very heavy", "Very ordinary"] },
   reckless: { meaning: "Acting without thinking of danger", distractors: ["Acting very cautiously", "Acting very slowly", "Acting very kindly"] },
-  cautious: { meaning: "Careful to avoid danger or mistakes", distractors: ["Acting recklessly", "Acting angrily", "Acting playfully"] },
+  cautious: { meaning: "Careful to avoid danger", distractors: ["Acting recklessly", "Acting angrily", "Acting playfully"] },
   humble: { meaning: "Not proud; modest", distractors: ["Very boastful", "Very shy", "Very stubborn"] },
   ordinary: { meaning: "Not special or unusual", distractors: ["Extraordinary and rare", "Extremely large", "Extremely old"] },
   extraordinary: { meaning: "Very unusual or remarkable", distractors: ["Completely ordinary", "Very small", "Very quiet"] },
@@ -121,7 +135,7 @@ const EXTENDED_WORDS = {
   miserable: { meaning: "Very unhappy", distractors: ["Very delighted", "Very proud", "Very calm"] },
   swift: { meaning: "Moving very fast", distractors: ["Moving very slowly", "Standing completely still", "Moving very quietly"] },
   sluggish: { meaning: "Slow-moving; lacking energy", distractors: ["Fast and energetic", "Loud and cheerful", "Careful and precise"] },
-  vibrant: { meaning: "Full of energy and bright colour", distractors: ["Dull and faded", "Quiet and still", "Old and worn"] },
+  vibrant: { meaning: "Full of bright energy", distractors: ["Dull and faded", "Quiet and still", "Old and worn"] },
 };
 
 const WORDS = Object.assign({}, CORE_WORDS, EXTENDED_WORDS);
@@ -315,7 +329,14 @@ const WHAT_TO_TRY_STRONG_TEMPLATES = [
 // (see api/_claudeHandler.js's PROMPT_BUILDERS) -- matching on it directly
 // here, instead of sniffing prompt text, is both simpler and immune to the
 // prompt-text-matching bugs the real endpoint used to have to worry about.
-function mockClaude(promptId, messages) {
+// Mirrors STAGE2_CYCLE/STAGE3_CYCLE in shared/prompts.js -- kept as a
+// plain local literal rather than importing that module, since this file
+// is also string-inlined verbatim into the offline single-file build (see
+// the header comment above) and must stay dependency-free.
+const STAGE2_TYPES = ["word_bank", "letter_connect"];
+const STAGE3_TYPES = ["tap_select", "reverse_clue"];
+
+function mockClaude(promptId, messages, params) {
   const allMsgs = (messages || []).map(function (m) { return m.content; }).join("\n");
   const lastMsg = (messages && messages[messages.length - 1] && messages[messages.length - 1].content) || "";
 
@@ -486,15 +507,30 @@ function mockClaude(promptId, messages) {
     // never uses free typing at Stage 1 either (see STAGE1_CYCLE).
     if (stage === 1) {
       const shape = w || WORDS[KNOWN_WORDS[Math.floor(Math.random() * KNOWN_WORDS.length)]];
+      // Respects the session's real stage1Type when the caller passes it
+      // (the live app alternates mcq/true_false per word via STAGE1_CYCLE,
+      // see shared/prompts.js) -- falls back to always-mcq only when no
+      // params are given at all, so other callers of this function (e.g.
+      // scripts/coach-eval.mjs) keep their existing deterministic behavior.
+      const stage1Type = params && params.stage1Type === "true_false" ? "true_false" : "mcq";
+      if (stage1Type === "true_false") {
+        const isTrueStatement = Math.random() < 0.5;
+        const claimedMeaning = isTrueStatement ? shape.meaning : pickOne(shape.distractors);
+        const statement = "In the passage, \"" + word + "\" means " + claimedMeaning.charAt(0).toLowerCase() + claimedMeaning.slice(1) + ".";
+        const message = hintGiven ? "Not quite! " + hintText : statement;
+        return { message: message, display_sentence: groundedSentence, input_type: "true_false", options: ["True", "False"], word_tiles: null, correct_answer: isTrueStatement ? "True" : "False", sentence_starter: null, stage: 1, grading_reasoning: null, hint_given: hintGiven, resolved: false, fun_fact: null };
+      }
       const options = [shape.meaning].concat(pickDistinct(shape.distractors, 3, null)).sort(function () { return Math.random() - 0.5; });
       const message = isFirstTurn ? pickOne(INTRO_TEMPLATES)(word) : pickOne(WRONG_WRAPPERS)(hintText);
       return { message: message, display_sentence: groundedSentence, input_type: "mcq", options: options, word_tiles: null, correct_answer: shape.meaning, sentence_starter: null, stage: 1, grading_reasoning: null, hint_given: hintGiven, resolved: false, fun_fact: null };
     }
 
-    // Stage 2: word_bank or letter_connect (deterministic per word, so a
-    // retry after a wrong spelling attempt stays the same mechanic).
+    // Stage 2: word_bank or letter_connect. Respects the session's real
+    // stage2Type when passed; otherwise falls back to a deterministic
+    // per-word split so a retry after a wrong spelling attempt still stays
+    // on the same mechanic.
     if (stage === 2) {
-      const inputType = word.charCodeAt(0) % 2 === 0 ? "word_bank" : "letter_connect";
+      const inputType = (params && STAGE2_TYPES.indexOf(params.stage2Type) !== -1) ? params.stage2Type : (word.charCodeAt(0) % 2 === 0 ? "word_bank" : "letter_connect");
       const message = hintGiven ? "Not quite, try spelling it again!" : pickOne(ADVANCE_TEMPLATES)(word);
       return { message: message, display_sentence: groundedSentence, input_type: inputType, options: null, word_tiles: shuffleLetters(word), correct_answer: null, sentence_starter: null, stage: 2, grading_reasoning: null, hint_given: hintGiven, resolved: false, fun_fact: null };
     }
@@ -505,8 +541,10 @@ function mockClaude(promptId, messages) {
     // used correctly, grounded in the real passage sentence when it has
     // enough other words to draw options from, otherwise falls back to
     // tap_select too, which never depends on passage length at all).
+    // Respects the session's real stage3Type when passed; otherwise falls
+    // back to a deterministic per-word split.
     if (stage === 3) {
-      const inputType = word.length % 2 === 0 ? "tap_select" : "reverse_clue";
+      const inputType = (params && STAGE3_TYPES.indexOf(params.stage3Type) !== -1) ? params.stage3Type : (word.length % 2 === 0 ? "tap_select" : "reverse_clue");
       if (inputType === "tap_select") {
         const group = oddOneOutFor(word);
         const message = hintGiven ? "Not quite, think about what it means!" : "Which word doesn't belong?";

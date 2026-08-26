@@ -154,7 +154,7 @@ const mockScript = String.raw`
           var claims1 = getClaims(headersInit);
           if (!claims1) { resolve(jsonResponse(401, { error: "Missing or expired access token", tokenInvalid: true })); return; }
           quotaUsedToday += 1;
-          var reply = mockClaude(body.promptId || "", body.messages || []);
+          var reply = mockClaude(body.promptId || "", body.messages || [], body.params);
           resolve(jsonResponse(200, { content: [{ type: "text", text: JSON.stringify(reply) }], quota: { used: quotaUsedToday, limit: 999999, remaining: 999999 - quotaUsedToday, exceeded: false } }));
           return;
         }

@@ -967,8 +967,11 @@ async function callClaude(promptId, params, messages, maxTokens = 1000) {
   if (demoModeOn) {
     // Same mock logic the offline rehearsal build runs on, called directly
     // in-process instead of over a fetch -- no network round trip, no
-    // quota, no retry path ever exercised.
-    return JSON.stringify(mockClaude(promptId, messages));
+    // quota, no retry path ever exercised. params is forwarded so the
+    // session's real stage1Type/stage2Type/stage3Type cycle (see
+    // STAGE1_CYCLE etc. in shared/prompts.js) actually gets exercised in
+    // Demo Mode too -- without this, true_false could never appear.
+    return JSON.stringify(mockClaude(promptId, messages, params));
   }
   const response = await fetch("/api/claude", {
     method: "POST",
@@ -1296,6 +1299,18 @@ function escapeRegex(s) {
 const NOUN_DETERMINERS = "the|a|an|his|her|its|their|this|that|some";
 const NOUN_FOLLOWERS = "was|is|were|are|felt|seemed|looked|became|grew|helps|help|hurts|has|had";
 
+// A handful of curated words genuinely ARE a noun or verb in their real
+// passage sentence (unlike most target words, which are adjectives), but
+// are mass/uncountable nouns used with no determiner at all in that
+// sentence ("Some animals use camouflage.", "That smell is called an
+// aroma." only gets a determiner via "an", but "Camouflage helps them
+// hide" has none) -- the regex heuristic below can't reliably tell that
+// apart from a genuine adjective-in-noun-slot mistake, so these are
+// listed explicitly rather than left to false-reject a correct "The
+// camouflage was very ___" starter. Mirrors STAGE4_NOUN_OR_VERB_WORDS in
+// scripts/mock-backend-logic.mjs -- keep the two in sync.
+const STAGE4_NOUN_OR_VERB_WORDS = new Set(["camouflage", "aroma"]);
+
 // Stage 4's sentence_starter embeds the target word directly (see prompt),
 // so it must respect the word's real grammatical role -- forcing an
 // adjective into a noun-subject slot ("The reluctant was very ___") reads
@@ -1306,7 +1321,9 @@ const NOUN_FOLLOWERS = "was|is|were|are|felt|seemed|looked|became|grew|helps|hel
 // determiner -- "an enormous orang utan" also has a determiner right
 // before "enormous", but "enormous" is a modifier, not the noun itself.
 function wordUsedAsNounInText(text, targetWord) {
-  const w = escapeRegex(String(targetWord || "").toLowerCase().trim());
+  const word = String(targetWord || "").toLowerCase().trim();
+  if (STAGE4_NOUN_OR_VERB_WORDS.has(word)) return true;
+  const w = escapeRegex(word);
   if (!w || !text) return false;
   return new RegExp(`\\b(${NOUN_DETERMINERS})\\s+${w}\\b(?=\\s*(?:[.,!?;:]|$|(?:${NOUN_FOLLOWERS})\\b))`, "i").test(
     String(text).toLowerCase()
@@ -5364,12 +5381,18 @@ function buildSkipReportEntry(wordDef, passageTitle, profile) {
   };
 }
 
+// Guess-speed floor (see answeredAtGateFloor/GATE_FLOOR_SLACK_SEC below):
+// timid/clever land right at their minGateSec + slack on purpose, so the
+// sample report actually demonstrates the "answered at guess speed" signal
+// instead of that whole check silently never firing (minGateSec used to be
+// missing here entirely). skipReason on "playful" likewise demonstrates the
+// "(kept trying)" vs. plain-skip distinction the real log tracks.
 const SAMPLE_LOG = [
-  { word: "brave", clueType: "contrast", concreteness: "abstract", finalStage: 2, hintsUsed: 0, skipped: false, priorKnowledge: "no", gotItVia: "clues", clueIdentified: "but she says they are", transferPassed: null, timeToAnswerSec: 18, passageTitle: "Pet Show Day", solvedAt: Date.now() - 500000 },
-  { word: "camouflage", clueType: "definition", concreteness: "abstract", finalStage: 4, hintsUsed: 1, skipped: false, priorKnowledge: "not_sure", gotItVia: "clues", clueIdentified: "helps them hide from enemies", transferPassed: true, timeToAnswerSec: 35, passageTitle: "Pet Show Day", solvedAt: Date.now() - 400000 },
-  { word: "timid", clueType: "inference", concreteness: "abstract", finalStage: 1, hintsUsed: 0, skipped: false, priorKnowledge: "no", gotItVia: "guessed", clueIdentified: null, transferPassed: null, timeToAnswerSec: 6, passageTitle: "Pet Show Day", solvedAt: Date.now() - 300000 },
-  { word: "clever", clueType: "example", concreteness: "abstract", finalStage: 5, hintsUsed: 0, skipped: false, priorKnowledge: "yes", gotItVia: "knew", clueIdentified: null, transferPassed: null, timeToAnswerSec: 4, passageTitle: "Pet Show Day", solvedAt: Date.now() - 200000 },
-  { word: "playful", clueType: "example", concreteness: "abstract", finalStage: 1, hintsUsed: 0, skipped: true, revealedMeaning: "\"playful\" means enjoying fun and games.", priorKnowledge: "no", gotItVia: null, clueIdentified: null, transferPassed: null, timeToAnswerSec: 22, passageTitle: "Pet Show Day", solvedAt: Date.now() - 100000 },
+  { word: "brave", clueType: "contrast", concreteness: "abstract", finalStage: 2, hintsUsed: 0, skipped: false, priorKnowledge: "no", gotItVia: "clues", clueIdentified: "but she says they are", transferPassed: null, timeToAnswerSec: 18, minGateSec: 4, passageTitle: "Pet Show Day", solvedAt: Date.now() - 500000 },
+  { word: "camouflage", clueType: "definition", concreteness: "abstract", finalStage: 4, hintsUsed: 1, skipped: false, priorKnowledge: "not_sure", gotItVia: "clues", clueIdentified: "helps them hide from enemies", transferPassed: true, timeToAnswerSec: 35, minGateSec: 6, passageTitle: "Pet Show Day", solvedAt: Date.now() - 400000 },
+  { word: "timid", clueType: "inference", concreteness: "abstract", finalStage: 1, hintsUsed: 0, skipped: false, priorKnowledge: "no", gotItVia: "guessed", clueIdentified: null, transferPassed: null, timeToAnswerSec: 6, minGateSec: 5, passageTitle: "Pet Show Day", solvedAt: Date.now() - 300000 },
+  { word: "clever", clueType: "example", concreteness: "abstract", finalStage: 5, hintsUsed: 0, skipped: false, priorKnowledge: "yes", gotItVia: "knew", clueIdentified: null, transferPassed: null, timeToAnswerSec: 4, minGateSec: 3, passageTitle: "Pet Show Day", solvedAt: Date.now() - 200000 },
+  { word: "playful", clueType: "example", concreteness: "abstract", finalStage: 1, hintsUsed: 0, skipped: true, skipReason: "stuck_limit", revealedMeaning: "\"playful\" means enjoying fun and games.", priorKnowledge: "no", gotItVia: null, clueIdentified: null, transferPassed: null, timeToAnswerSec: 22, minGateSec: 4, passageTitle: "Pet Show Day", solvedAt: Date.now() - 100000 },
 ];
 
 const SAMPLE_COMPREHENSION = {
@@ -5380,11 +5403,26 @@ const SAMPLE_COMPREHENSION = {
   correctAnswer: "It could open doors by itself",
 };
 
+// A fully pre-written diagnostic so the sample report never needs to call
+// the real AI (see the isDemo guard around the "Generate diagnostic
+// summary" button) -- clicking it would otherwise spend a school's real
+// Groq quota analysing entirely made-up data. Written by hand to match
+// SAMPLE_LOG/SAMPLE_STUDENT_STATS/SAMPLE_CALIBRATION below the same way a
+// real one would: named words, the guess-speed flag on "timid", and the
+// overconfidence signal from the fake history.
+const SAMPLE_SUMMARY = {
+  summary: "Sample Student understands words that are explained directly, but not ones they have to work out from a hint like \"but\" or \"helps them.\"",
+  corePattern: "**Explained-directly words land easily, inferred ones don't yet.**\n\n- **brave** and **clever** were solved independently — both have a clear contrast or example right next to them in the sentence.\n- **camouflage** needed a hint even on this replay of the passage, and it's needed one before too — a genuine repeat gap, not a one-off.\n- **timid** was answered in just 6 seconds, right at the fastest the app allows — too fast to have actually read the options, so this correct answer is weaker evidence than the stage alone suggests.\n- This means when a word's meaning is spelled out nearby, Sample Student is confident, but when they have to infer it from a supporting clue elsewhere in the sentence, that's a skill they haven't built yet, not a vocabulary gap.",
+  howReliable: "**Mostly trustworthy, with one guess-speed answer to treat carefully.**\n\n- **timid** was answered at guess speed (6 seconds, right at the app's minimum pacing floor), so treat that correct answer as weaker evidence than its stage would suggest.\n- Said they already knew **clever** beforehand, then solved it independently with no hints — a consistent, trustworthy self-report.\n- Across their last 3 sessions, Sample Student has said \"I already knew it\" and then still needed a hint once before — worth a quick spot-check next time they claim prior knowledge on a new word.",
+  storyUnderstandingNote: "Answered the whole-passage question correctly on the first try, showing they followed **Ali's dog** and the actual story events, not just the individual words.",
+  whatToTry: "**Give a quick guided example of spotting an indirect clue before the next reading task.**\n\n- **camouflage** has needed a hint twice now across two different sessions with this same passage — it's the one word worth re-teaching directly rather than waiting for it to click on its own.\n- Model finding the supporting phrase (\"helps them hide from enemies\") right after the hard word, then have them try the same move on a new sentence.\n- Try saying: \"Let's find the words right after 'camouflage' that explain what it means — what job does it do for the animal?\"",
+};
+
 // Made-up, same as the rest of the sample report -- "definition" matches
 // what TeacherScreen's own nextStepWeakest independently derives from
-// SAMPLE_LOG above (camouflage needed a hint, the only definition-clue
-// word), so the Class Pattern and Suggested Next Step cards agree on the
-// same headline gap instead of naming two different clue types.
+// SAMPLE_STUDENT_STATS below (camouflage is the persistent definition-clue
+// gap across sessions), so the Class Pattern and Suggested Next Step cards
+// agree on the same headline gap instead of naming two different clue types.
 const SAMPLE_CLASS_PATTERN = {
   type: "definition",
   matchingCount: 5,
@@ -5392,6 +5430,104 @@ const SAMPLE_CLASS_PATTERN = {
   className: "4A",
   matchingNames: ["Sample Student", "Aisha", "Marcus", "Ravi", "Siti"],
 };
+
+// Everything below (SAMPLE_STUDENT_STATS/PAST_SESSIONS/WORD_HISTORY/
+// CALIBRATION) exists purely so the sample report can demonstrate the
+// cross-session "History" section, which otherwise never renders at all
+// for a made-up student with no real account (see hasHistory in
+// TeacherScreen -- it needs studentStats.sessionCount >= 2, and the real
+// fetch that would normally populate this is deliberately skipped whenever
+// isDemo is true, since there's no real student to fetch). Two fake past
+// sessions plus this one add up to a believable 3-session arc: a rocky
+// first attempt at this same passage, a strong middle session on a
+// different one, then today's replay showing real (but incomplete)
+// growth on the one word that keeps coming back.
+const SAMPLE_PAST_SESSION_1_LOG = [
+  { word: "brave", clueType: "contrast", finalStage: 1, hintsUsed: 0, skipped: false, priorKnowledge: "no", gotItVia: "clues" },
+  { word: "camouflage", clueType: "definition", finalStage: 2, hintsUsed: 1, skipped: false, priorKnowledge: "not_sure", gotItVia: "clues" },
+  { word: "timid", clueType: "inference", finalStage: 1, hintsUsed: 1, skipped: false, priorKnowledge: "yes", gotItVia: "clues" },
+  { word: "clever", clueType: "example", finalStage: 2, hintsUsed: 0, skipped: false, priorKnowledge: "no", gotItVia: "clues" },
+  { word: "playful", clueType: "example", finalStage: 1, hintsUsed: 0, skipped: true, skipReason: "manual", priorKnowledge: "no", gotItVia: null },
+];
+const SAMPLE_PAST_SESSION_2_LOG = [
+  { word: "bustling", clueType: "example", finalStage: 1, hintsUsed: 0, skipped: false, priorKnowledge: "no", gotItVia: "clues" },
+  { word: "delighted", clueType: "definition", finalStage: 1, hintsUsed: 0, skipped: false, priorKnowledge: "yes", gotItVia: "knew" },
+  { word: "fragrant", clueType: "inference", finalStage: 3, hintsUsed: 1, skipped: false, priorKnowledge: "not_sure", gotItVia: "clues" },
+  { word: "exhausted", clueType: "contrast", finalStage: 2, hintsUsed: 0, skipped: false, priorKnowledge: "no", gotItVia: "knew" },
+  { word: "generous", clueType: "example", finalStage: 1, hintsUsed: 0, skipped: false, priorKnowledge: "no", gotItVia: "clues" },
+];
+const SAMPLE_PAST_SESSION_2_SUMMARY = {
+  summary: "Sample Student had a strong session overall, working out most words independently with only one needing a hint.",
+  corePattern: "**A confident session, with one indirect clue still needing support.**\n\n- **bustling**, **delighted**, **exhausted**, and **generous** were all solved independently.\n- **fragrant** needed a hint — the clue for it sits one sentence further away than the others, not right next to the word itself.\n- This means Sample Student handles nearby clues very well; the gap only shows up when the supporting detail is a little further from the word.",
+  howReliable: "**Trustworthy — no guess-speed answers and self-reports mostly lined up.**\n\n- Said they already knew **delighted** beforehand, then solved it independently with no hints — a consistent, trustworthy self-report.\n- Said **exhausted** was new to them, then said afterward they already knew it — a small contradiction worth a quick check, not a concern on its own.",
+  storyUnderstandingNote: "Comprehension check passed on the first try, showing they followed the festival's actual events, not just the individual words.",
+  whatToTry: "**Practice finding a clue that's a sentence or two away from the word, not just right next to it.**\n\n- **fragrant** is the one example this session where the explanation came later in the paragraph rather than immediately after the word.\n- Try saying: \"The clue isn't always right next door — keep reading a little further before you decide.\"",
+};
+const ONE_DAY_MS = 86400000;
+const SAMPLE_PAST_SESSIONS = [
+  {
+    id: "sample-session-2",
+    passageTitle: "The Kampung Festival",
+    passageEmoji: "🎋",
+    startedAt: new Date(Date.now() - 7 * ONE_DAY_MS).toISOString(),
+    finishedAt: new Date(Date.now() - 7 * ONE_DAY_MS + 900000).toISOString(),
+    comprehensionCorrect: true,
+    teacherNotes: null,
+    independentCount: 4,
+    totalCount: 5,
+    _demoLog: SAMPLE_PAST_SESSION_2_LOG,
+    _demoDiagnosticReport: SAMPLE_PAST_SESSION_2_SUMMARY,
+    _demoWhatToTry: SAMPLE_PAST_SESSION_2_SUMMARY.whatToTry,
+    _demoExistingNotes: "",
+  },
+  {
+    id: "sample-session-1",
+    passageTitle: "Pet Show Day",
+    passageEmoji: "🐾",
+    startedAt: new Date(Date.now() - 14 * ONE_DAY_MS).toISOString(),
+    finishedAt: new Date(Date.now() - 14 * ONE_DAY_MS + 900000).toISOString(),
+    comprehensionCorrect: false,
+    teacherNotes: null,
+    independentCount: 2,
+    totalCount: 4,
+    _demoLog: SAMPLE_PAST_SESSION_1_LOG,
+    _demoDiagnosticReport: null,
+  },
+];
+
+// Same shape/math as computeStatsBreakdown in api/_teacherRosterHandler.js,
+// hand-computed across all 3 sessions above (the two past ones plus
+// SAMPLE_LOG) so the numbers are internally consistent rather than
+// independently made up.
+const SAMPLE_STUDENT_STATS = {
+  total: 15,
+  independent: 9,
+  withHelp: 4,
+  skipped: 2,
+  sessionCount: 3,
+  breakdown: [
+    { type: "contrast", total: 3, independent: 3 },
+    { type: "definition", total: 3, independent: 1 },
+    { type: "example", total: 4, independent: 4 },
+    { type: "inference", total: 3, independent: 1 },
+  ],
+};
+
+// "camouflage" is the one word that recurs (same passage, replayed): still
+// needing a hint both times, exactly the kind of persistent gap the real
+// "Words That Keep Coming Back" callout exists to surface.
+const SAMPLE_WORD_HISTORY = {
+  camouflage: [
+    { sessionId: "sample-session-1", finalStage: 2, hintsUsed: 1, skipped: false, solvedAt: new Date(Date.now() - 14 * ONE_DAY_MS + 180000).toISOString() },
+    { sessionId: "sample-session-3", finalStage: 4, hintsUsed: 1, skipped: false, solvedAt: new Date(Date.now() - 400000).toISOString() },
+  ],
+};
+
+// sampleSize pools every word across all 3 sessions that had a
+// priorKnowledge answer (all 15 here); overconfidence counts "timid" in
+// the first Pet Show Day attempt (said "yes" but still needed a hint),
+// contradictions counts "exhausted" (said "no" but then said they knew it).
+const SAMPLE_CALIBRATION = { overconfidence: 1, contradictions: 1, sampleSize: 15 };
 
 function TourScreen({ avatarConfig, passage, onDone, bilingual, onToggleBilingual, standalone = false }) {
   const [page, setPage] = useState(0);
@@ -5775,7 +5911,7 @@ function DiagnosticReportSkeleton() {
   );
 }
 
-function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log, onBack, onReset, sessionStartedAt, comprehensionResult, isDemo = false, initialSummary = null, onDiagnosticGenerated = null, hideResetSection = false, classPattern = null, selfComputeClassPattern = false, onCreateTargetedPassage = null }) {
+function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log, onBack, onReset, sessionStartedAt, comprehensionResult, isDemo = false, initialSummary = null, onDiagnosticGenerated = null, hideResetSection = false, classPattern = null, selfComputeClassPattern = false, onCreateTargetedPassage = null, initialStudentStats = null, initialPastSessions = null, initialWordHistory = null, initialCalibration = null }) {
   const demoModeActive = useDemoMode();
 
   // Only the live "just finished" report (selfComputeClassPattern) needs
@@ -5815,10 +5951,10 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
   // session they've ever finished, not just the one being viewed here.
   // realStudentId is the real DB student UUID, only available for a real,
   // signed-in student (the sample report has none, isDemo covers that).
-  const [studentStats, setStudentStats] = useState(null);
-  const [pastSessions, setPastSessions] = useState(null);
-  const [wordHistory, setWordHistory] = useState(null);
-  const [calibration, setCalibration] = useState(null);
+  const [studentStats, setStudentStats] = useState(initialStudentStats);
+  const [pastSessions, setPastSessions] = useState(initialPastSessions);
+  const [wordHistory, setWordHistory] = useState(initialWordHistory);
+  const [calibration, setCalibration] = useState(initialCalibration);
   useEffect(() => {
     if (!realStudentId || isDemo) return;
     let cancelled = false;
@@ -5854,6 +5990,28 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
     setViewingSessionId(session.id);
     setViewingDetail(null);
     setViewingDetailError(null);
+    // Sample report: this fake session id has nothing real to fetch --
+    // build the same { session, log } shape directly from the canned data
+    // already attached to it above instead of hitting the network.
+    if (isDemo) {
+      setViewingDetail({
+        session: {
+          id: session.id,
+          studentId: null,
+          studentName: studentId,
+          passageTitle: session.passageTitle,
+          passageEmoji: session.passageEmoji,
+          startedAt: session.startedAt,
+          finishedAt: session.finishedAt,
+          comprehensionResult: null,
+          diagnosticReport: session._demoDiagnosticReport || null,
+          teacherNotes: session.teacherNotes,
+        },
+        log: session._demoLog || [],
+      });
+      setViewingDetailLoading(false);
+      return;
+    }
     setViewingDetailLoading(true);
     const requestId = ++viewingRequestRef.current;
     fetchSessionDetail(session.id)
@@ -5872,6 +6030,12 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
     if (!pastSessions || !sessionId) { setPreviousSession(null); return; }
     const prior = pastSessions.find((s) => s.id !== sessionId);
     if (!prior) { setPreviousSession(null); return; }
+    // Sample report: no real session to fetch, use the canned whatToTry
+    // already attached to the fake pastSessions entry itself.
+    if (isDemo) {
+      if (prior._demoWhatToTry) setPreviousSession({ id: prior.id, whatToTry: prior._demoWhatToTry, existingNotes: prior._demoExistingNotes || "" });
+      return;
+    }
     let cancelled = false;
     fetchSessionDetail(prior.id)
       .then((data) => {
@@ -5881,7 +6045,7 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
       })
       .catch(() => {});
     return () => { cancelled = true; };
-  }, [pastSessions, sessionId]);
+  }, [pastSessions, sessionId, isDemo]);
   const [followUpNote, setFollowUpNote] = useState("");
   const [followUpSaved, setFollowUpSaved] = useState(false);
   const [followUpSaving, setFollowUpSaving] = useState(false);
@@ -5889,6 +6053,13 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
   async function handleSaveFollowUp() {
     if (!sessionId || followUpSaving) return;
     setFollowUpSaving(true);
+    // Sample report: sessionId is a fake id with no real row to PATCH --
+    // simulate the save locally instead of spending a real network call
+    // that would just 404.
+    if (isDemo) {
+      setTimeout(() => { setFollowUpSaved(true); setFollowUpSaving(false); }, 300);
+      return;
+    }
     try {
       await saveTeacherNotes(sessionId, followUpNote.trim());
       setFollowUpSaved(true);
@@ -6005,10 +6176,11 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
           comprehensionResult={viewingDetail.session.comprehensionResult}
           sessionStartedAt={new Date(viewingDetail.session.startedAt).getTime()}
           initialSummary={viewingDetail.session.diagnosticReport}
-          onDiagnosticGenerated={(s) => cacheSessionDiagnostic(viewingDetail.session.id, s).catch(() => {})}
+          onDiagnosticGenerated={isDemo ? null : (s) => cacheSessionDiagnostic(viewingDetail.session.id, s).catch(() => {})}
           onBack={() => setViewingSessionId(null)}
           onReset={() => setViewingSessionId(null)}
           hideResetSection
+          isDemo={isDemo}
           classPattern={classPattern}
           onCreateTargetedPassage={onCreateTargetedPassage}
         />
@@ -6138,12 +6310,19 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
         />
       </div>
 
-      <div className="text-center mb-6 relative z-10">
-        <BigButton onClick={generateSummary} disabled={log.length === 0 || loading}>
-          {loading ? "Analysing…" : "🔎 Generate diagnostic summary"}
-        </BigButton>
-        {error && <p className="font-body text-xs text-rose-600 mt-3" aria-live="polite">{error}</p>}
-      </div>
+      {/* Sample report: the log is entirely made up, so there's nothing
+          real to analyse -- initialSummary already ships a fully
+          pre-written report (see SAMPLE_SUMMARY), and this button would
+          otherwise spend a school's real AI quota re-analysing fake data
+          for no benefit. */}
+      {!isDemo && (
+        <div className="text-center mb-6 relative z-10">
+          <BigButton onClick={generateSummary} disabled={log.length === 0 || loading}>
+            {loading ? "Analysing…" : "🔎 Generate diagnostic summary"}
+          </BigButton>
+          {error && <p className="font-body text-xs text-rose-600 mt-3" aria-live="polite">{error}</p>}
+        </div>
+      )}
 
       {loading && <DiagnosticReportSkeleton />}
 
@@ -7771,13 +7950,19 @@ export default function App() {
         {screen === "demo-report" && (
           <TeacherScreen
             studentId="Sample Student"
+            sessionId="sample-session-3"
             log={SAMPLE_LOG}
             onBack={() => setScreen("setup")}
             onReset={() => setScreen("setup")}
             sessionStartedAt={Date.now() - 600000}
             comprehensionResult={SAMPLE_COMPREHENSION}
             isDemo
+            initialSummary={SAMPLE_SUMMARY}
             classPattern={SAMPLE_CLASS_PATTERN}
+            initialStudentStats={SAMPLE_STUDENT_STATS}
+            initialPastSessions={SAMPLE_PAST_SESSIONS}
+            initialWordHistory={SAMPLE_WORD_HISTORY}
+            initialCalibration={SAMPLE_CALIBRATION}
             onCreateTargetedPassage={handleCreateTargetedPassage}
           />
         )}
