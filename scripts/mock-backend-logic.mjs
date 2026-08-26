@@ -495,6 +495,36 @@ function mockClaude(promptId, messages, params) {
     };
   }
 
+  // Passage starter ("Create a targeted passage" from a report) — one
+  // hand-written starter per clue type instead of a real AI call, so Demo
+  // Mode's promise of "instant, no waiting" holds here too. Mirrors the
+  // shape PASSAGE_STARTER_SYSTEM_PROMPT asks the real model for: a short
+  // title plus a 3-4 sentence passage with one clear moment of that clue
+  // type, meant for the teacher to edit and extend, not a finished map.
+  if (promptId === "passage_starter") {
+    const clueType = params && params.clueType;
+    const starters = {
+      contrast: {
+        title: "The Two Neighbours",
+        text: "Mr. Tan's garden was always tidy, but Mr. Wong's garden next door was unkempt, with weeds growing tall between the fence posts. Every weekend, Mr. Tan trimmed his hedges and swept his path. Mr. Wong, however, preferred to spend his weekends fishing by the river instead.",
+      },
+      definition: {
+        title: "The New Word",
+        text: "Aunty Mei brought a durian to the family dinner, and everyone said it had a very pungent smell, meaning a smell that is strong and sharp. Little Wei Ling held her nose at first. By the end of dinner, though, she was asking for a second slice.",
+      },
+      example: {
+        title: "A Resourceful Afternoon",
+        text: "When the kite's string snapped, Farid proved how resourceful he was, quickly using an old shoelace to tie it back together. He also patched a torn corner with tape from his school bag. Within minutes, the kite was soaring above the field again.",
+      },
+      inference: {
+        title: "The Quiet Classroom",
+        text: "Mrs. Lim walked in, glanced at the scattered chalk dust and the broken ruler on the floor, and said nothing at first. The class fell silent, each student suddenly very interested in their own desk. Nobody wanted to be the one she looked at next.",
+      },
+    };
+    const picked = starters[clueType] || starters.inference;
+    return { title: picked.title, text: picked.text };
+  }
+
   // Coach — the core loop. Uses the "[FACT: this answer is ...]" tag the
   // real frontend already includes in the student's message to know the
   // verdict without needing any real language understanding.

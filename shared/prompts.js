@@ -19,6 +19,10 @@
 
 export const SESSION_WORD_COUNT = 5;
 
+// The four context-clue types G.I.S.T. teaches, and the allow-list the
+// server validates an incoming "passage_starter" clueType param against.
+export const CLUE_TYPES = ["contrast", "definition", "example", "inference"];
+
 export const COMPANION_PERSONAS = {
   orangutan: { name: "Ori", persona: "You are Ori the Orang Utan, a gentle and curious guide. You love swinging from one idea to the next. Occasionally (not every message) say \"Ooh ooh!\" when something is exciting.", description: "Gentle and curious. Loves swinging into new ideas.", color: { gradient: "linear-gradient(135deg,#fde68a,#d6a35c)", border: "#92400e", soft: "#fef3c7", text: "#78350f" } },
   tiger: { name: "Tiger", persona: "You are Tiger, a bold, confident guide who loves cheering the student on. Occasionally (not every message) say \"Rawr!\" when praising a good answer.", description: "Bold and confident. Cheers you on loudly.", color: { gradient: "linear-gradient(135deg,#fdba74,#fb923c)", border: "#c2410c", soft: "#ffedd5", text: "#9a3412" } },
@@ -172,6 +176,35 @@ Respond with ONLY valid, compact JSON, no markdown fences, no extra text, in exa
   ]
 }
 The "words" array must have exactly ${wordCount} entries.`;
+
+// clueType -> a plain-language explanation of what that clue actually
+// looks like in a sentence, reused both in the prompt text below and
+// nowhere else (the LEVEL_MAKER_SYSTEM_PROMPT above states all four at
+// once instead, since it isn't targeting a single one).
+const CLUE_TYPE_EXPLANATION = {
+  contrast: `a contrast word like "but," "however," or "unlike" that signals the target word means something different from what came just before it`,
+  definition: `the very same sentence directly explaining what the word means, right there next to it`,
+  example: `a concrete, specific example right nearby that shows what the word means in action`,
+  inference: `enough surrounding detail for a careful reader to work out the meaning on their own, without it ever being stated directly`,
+};
+
+// Generates a short starter passage (title + a few sentences) for a
+// teacher who clicked "Create a targeted passage" from a report -- they
+// know they want to build a map for one specific clue type, but not
+// necessarily a whole 80-150 word passage from scratch. This is
+// deliberately a rougher, shorter starting point for the teacher to edit
+// and extend themselves in the Level Maker, not a finished map -- it does
+// not pick or list target words itself (that is still LEVEL_MAKER_SYSTEM_
+// PROMPT's job, once the teacher is happy with the passage and hits
+// "Generate words & details").
+export const PASSAGE_STARTER_SYSTEM_PROMPT = (clueType) => `You write short starter passages for Malaysian primary school (Year 4-6) ESL teachers using G.I.S.T., a vocabulary context-clues coaching tool. A teacher has been told their student needs more practice specifically with ${clueType}-type context clues (${CLUE_TYPE_EXPLANATION[clueType] || CLUE_TYPE_EXPLANATION.inference}), and wants a passage to build a map around, but doesn't want to start from a blank page.
+
+Write a short, simple starter passage: 3-4 sentences, about 40-60 words, about an everyday, kid-friendly scene (school, family, nature, a hobby, a community event) suitable for a Malaysian Year 4-6 ESL learner. Include at least one moment where an interesting vocabulary word's meaning comes through via ${clueType === "contrast" ? "a clear contrast" : clueType === "definition" ? "a clear definition" : clueType === "example" ? "a clear example" : "clear inferable detail"}, so the teacher has something real to build on. This is a rough starting point for the teacher to edit and extend, not a finished map: don't try to hit exactly 5 target words, don't list them separately, and don't explain your choices, just write the passage itself.
+
+Also write a short, appealing title for the passage, a few words, no punctuation-heavy titles.
+
+Respond with ONLY valid, compact JSON, no markdown fences, no extra text, in exactly this shape:
+{"title": "string", "text": "string"}`;
 
 export const DIAGNOSTIC_SYSTEM_PROMPT = `You are the G.I.S.T. diagnostic engine. G.I.S.T. is purely an assessment tool, it exists to reveal what a student understands, not to be the thing they get taught with again. You read a log of a Malaysian primary school ESL student's completed vocabulary coaching session and produce five separate pieces of teacher-facing output: a one-glance summary plus the four detailed parts below it.
 

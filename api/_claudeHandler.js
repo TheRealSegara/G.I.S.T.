@@ -16,6 +16,7 @@ import { verifyToken } from "./_auth.js";
 import { isOriginAllowed, getClientIp, pruneIfLarge, isPlainObjectWithOnlyKeys, createRateLimiter, getBearerToken, DAILY_QUOTA_PER_CODE } from "./_shared.js";
 import {
   SESSION_WORD_COUNT,
+  CLUE_TYPES,
   COMPANION_PERSONAS,
   STAGE1_CYCLE,
   STAGE2_CYCLE,
@@ -25,6 +26,7 @@ import {
   COMPREHENSION_SYSTEM_PROMPT,
   SINGLE_WORD_REGEN_PROMPT,
   LEVEL_MAKER_SYSTEM_PROMPT,
+  PASSAGE_STARTER_SYSTEM_PROMPT,
   DIAGNOSTIC_SYSTEM_PROMPT,
 } from "../shared/prompts.js";
 
@@ -37,6 +39,7 @@ import {
 const ALLOWED_BODY_KEYS = ["model", "promptId", "params", "messages", "max_tokens"];
 const ALLOWED_MESSAGE_KEYS = ["role", "content"];
 const ALLOWED_COACH_PARAM_KEYS = ["companionId", "stage1Type", "stage2Type", "stage3Type"];
+const ALLOWED_PASSAGE_STARTER_PARAM_KEYS = ["clueType"];
 
 // llama-3.1-8b-instant was decommissioned by Groq on 2026-08-16; this
 // default was switched to their recommended replacement ahead of that
@@ -125,12 +128,23 @@ function fixedPrompt(promptText) {
   return (params) => (params === undefined ? promptText : null);
 }
 
+// "Create a targeted passage" from a report: the only other parameterized
+// prompt besides "coach", validated the same way -- an explicit enum
+// allow-list, null on anything else so the handler rejects it with a 400.
+function buildPassageStarterPrompt(params) {
+  if (!isPlainObjectWithOnlyKeys(params, ALLOWED_PASSAGE_STARTER_PARAM_KEYS)) return null;
+  const { clueType } = params;
+  if (!CLUE_TYPES.includes(clueType)) return null;
+  return PASSAGE_STARTER_SYSTEM_PROMPT(clueType);
+}
+
 const PROMPT_BUILDERS = {
   coach: buildCoachPrompt,
   transfer_test: fixedPrompt(TRANSFER_TEST_SYSTEM_PROMPT),
   comprehension: fixedPrompt(COMPREHENSION_SYSTEM_PROMPT),
   single_word_regen: fixedPrompt(SINGLE_WORD_REGEN_PROMPT),
   level_maker: fixedPrompt(LEVEL_MAKER_SYSTEM_PROMPT(SESSION_WORD_COUNT)),
+  passage_starter: buildPassageStarterPrompt,
   diagnostic: fixedPrompt(DIAGNOSTIC_SYSTEM_PROMPT),
 };
 

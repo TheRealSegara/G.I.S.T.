@@ -1629,6 +1629,34 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, bilingual, 
   const [makerSaved, setMakerSaved] = useState(false);
   const [makerWords, setMakerWords] = useState(() => Array(SESSION_WORD_COUNT).fill(""));
   const [regeneratingIndex, setRegeneratingIndex] = useState(null);
+  // Arriving here from a report's "Create a targeted passage" (makerFocus
+  // set) previously dropped the teacher onto a blank textarea with only a
+  // banner telling them what to paste -- this auto-fills a real starting
+  // point instead, one AI call (or an instant canned one in Demo Mode) run
+  // once, right after mount, so the teacher never faces an empty box.
+  const [starterGenerating, setStarterGenerating] = useState(false);
+  const [starterError, setStarterError] = useState(null);
+  const starterFetchedRef = useRef(false);
+  useEffect(() => {
+    if (!makerFocus || starterFetchedRef.current) return;
+    starterFetchedRef.current = true;
+    setStarterGenerating(true);
+    setStarterError(null);
+    callClaudeWithRetry(
+      "passage_starter",
+      { clueType: makerFocus },
+      [{ role: "user", content: `Write a short starter passage focused on ${makerFocus}-type context clues.` }],
+      MAX_RETRY_ATTEMPTS,
+      (p) => p && typeof p.title === "string" && typeof p.text === "string" && p.title.trim() && p.text.trim()
+    )
+      .then((parsed) => {
+        setMakerTitle(parsed.title.trim());
+        setMakerText(parsed.text.trim());
+      })
+      .catch(() => setStarterError("Couldn't write a starter passage just now — paste or write your own below."))
+      .finally(() => setStarterGenerating(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const allPassages = { ...PASSAGES, ...Object.fromEntries(customPassages.map((p) => [p.id, p])) };
 
@@ -1928,8 +1956,13 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, bilingual, 
             {makerFocus && (
               <div className="flex items-center gap-2 mb-5 px-4 py-3 rounded-2xl" style={{ background: "#ede9fe", border: "2px solid #7c3aed" }}>
                 <span className="text-xl">🎯</span>
-                <p className="font-body text-sm text-violet-900">
-                  <strong className="capitalize">{makerFocus}-clue focus</strong> — from a report suggesting extra practice with {makerFocus}-type clues. Paste any passage below, the AI will lean toward that.
+                <p className="font-body text-sm text-violet-900" aria-live="polite">
+                  <strong className="capitalize">{makerFocus}-clue focus</strong> — from a report suggesting extra practice with {makerFocus}-type clues.{" "}
+                  {starterGenerating
+                    ? "Writing a starter passage for you now…"
+                    : starterError
+                    ? starterError
+                    : "We wrote a starter passage below — edit it, replace it, or paste your own."}
                 </p>
               </div>
             )}
@@ -1940,7 +1973,8 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, bilingual, 
               value={makerTitle}
               onChange={(e) => setMakerTitle(e.target.value)}
               placeholder="e.g. A Day at the Market"
-              className="w-full bg-teal-50 rounded-2xl border-2 border-teal-300 px-4 py-3 font-body text-stone-700 mb-4 focus:outline-none focus:border-teal-500"
+              disabled={starterGenerating}
+              className="w-full bg-teal-50 rounded-2xl border-2 border-teal-300 px-4 py-3 font-body text-stone-700 mb-4 focus:outline-none focus:border-teal-500 disabled:opacity-60"
             />
 
             <label htmlFor="maker-text" className="font-display font-700 text-xs uppercase tracking-wide text-teal-700 block mb-2">Passage text</label>
@@ -1948,9 +1982,10 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, bilingual, 
               id="maker-text"
               value={makerText}
               onChange={(e) => setMakerText(e.target.value)}
-              placeholder="Paste or write your passage here…"
+              placeholder={starterGenerating ? "Writing a starter passage for you…" : "Paste or write your passage here…"}
               rows={6}
-              className="w-full bg-teal-50 rounded-2xl border-2 border-teal-300 px-4 py-3 font-body text-sm text-stone-700 focus:outline-none focus:border-teal-500"
+              disabled={starterGenerating}
+              className="w-full bg-teal-50 rounded-2xl border-2 border-teal-300 px-4 py-3 font-body text-sm text-stone-700 focus:outline-none focus:border-teal-500 disabled:opacity-60"
             />
             {(() => {
               const wc = makerText.trim() ? makerText.trim().split(/\s+/).length : 0;
