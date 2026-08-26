@@ -3595,14 +3595,18 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onSkip
 
     const text = entry.text || "";
     const reduceMotion = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-    const totalMs = reduceMotion ? 0 : text.length * TYPEWRITER_CHAR_MS;
+    // Demo Mode also skips the letter-by-letter reveal itself, same as
+    // reduced motion -- it's part of the same "instant" promise (see the
+    // pacing-gate bypass below).
+    const skipTextReveal = reduceMotion || demoModeActive;
+    const totalMs = skipTextReveal ? 0 : text.length * TYPEWRITER_CHAR_MS;
 
     if (lockAnswers) {
       setAnswersLocked(true);
       setAnswersEnabled(false);
     }
 
-    if (reduceMotion) {
+    if (skipTextReveal) {
       setTypingIndex(null);
       setRevealedLength(text.length);
     } else {
@@ -3621,8 +3625,18 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onSkip
     }
 
     if (lockAnswers) {
-      const lockDuration = Math.max(TYPEWRITER_MIN_LOCK_MS, totalMs);
-      gateMsAccumRef.current += lockDuration + optionsReadMs;
+      // Demo Mode's own toggle promises "instant example replies, no
+      // waiting between turns" -- skip the whole pacing gate here, not
+      // just the text animation, so clicking through fast never hits a
+      // multi-second dead zone that reads as the buttons being broken.
+      // Real sessions (and prefers-reduced-motion on its own) keep the
+      // full lock/read-time gate: it's load-bearing there, it's exactly
+      // what the guess-speed confidence signal measures, but a Demo Mode
+      // session is never saved as real data, so there's nothing that
+      // signal needs to protect here.
+      const lockDuration = demoModeActive ? 0 : Math.max(TYPEWRITER_MIN_LOCK_MS, totalMs);
+      const effectiveOptionsReadMs = demoModeActive ? 0 : optionsReadMs;
+      gateMsAccumRef.current += lockDuration + effectiveOptionsReadMs;
       lockTimerRef.current = setTimeout(() => {
         setAnswersLocked(false);
         lockTimerRef.current = null;
@@ -3633,7 +3647,7 @@ function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onSkip
         enableTimerRef.current = setTimeout(() => {
           setAnswersEnabled(true);
           enableTimerRef.current = null;
-        }, optionsReadMs);
+        }, effectiveOptionsReadMs);
       }, lockDuration);
     }
   }
