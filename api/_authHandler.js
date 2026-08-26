@@ -50,20 +50,6 @@ function getAccessCodes() {
     .filter((c) => c.code);
 }
 
-// Best-effort per-instance brute-force guard on code attempts, same
-// caveats as the rate limiter in _claudeHandler.js (resets per instance).
-function isBruteForceBlocked(ip) {
-  pruneIfLarge(attemptLog, 5000, (e) => Date.now() - e.windowStart > ATTEMPT_WINDOW_MS);
-  const now = Date.now();
-  const entry = attemptLog.get(ip);
-  if (!entry || now - entry.windowStart > ATTEMPT_WINDOW_MS) {
-    attemptLog.set(ip, { windowStart: now, count: 1 });
-    return false;
-  }
-  entry.count += 1;
-  return entry.count > MAX_ATTEMPTS;
-}
-
 export default async function authHandler(req, res) {
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");

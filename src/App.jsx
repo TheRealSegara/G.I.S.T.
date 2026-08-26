@@ -7412,20 +7412,39 @@ function FileBoxScreen({ onBack, onCreateTargetedPassage }) {
   const [renameClassName, setRenameClassName] = useState("");
   const [deleteClassTarget, setDeleteClassTarget] = useState(null); // {id, name} pending delete confirmation, or null
 
+  // Demo Mode's persistent, mutable shadow of SAMPLE_ROSTER/SAMPLE_CLASSES.
+  // Every demo mutation (reassign, rename, create, delete) below writes
+  // here, never to SAMPLE_ROSTER/SAMPLE_CLASSES themselves (shared module-
+  // level consts). Without this, the roster-loading effect below re-derived
+  // the scoped view straight from those untouched consts on every
+  // selectedClassId/rosterRefreshKey change -- so switching the class
+  // filter and back (or any action that bumps rosterRefreshKey) silently
+  // discarded every demo edit made so far, resurrecting a "deleted" student
+  // or undoing a class reassignment. null means "not entered Demo Mode
+  // yet," at which point the effect below seeds it from the samples once.
+  const [demoRosterFull, setDemoRosterFull] = useState(null);
+  const [demoClassesFull, setDemoClassesFull] = useState(null);
+
   const rosterRequestRef = useRef(0);
   useEffect(() => {
-    // Demo Mode: build the same shape straight from the canned fixtures
-    // instead of hitting the network, so File Box shows a full 3-student
-    // roster/class immediately with no real access code or backend.
+    // Demo Mode: build the same shape straight from the persistent demo
+    // shadow (seeded from the canned fixtures on first entry) instead of
+    // hitting the network, so File Box shows a full 3-student roster/class
+    // immediately with no real access code or backend, while still
+    // remembering edits made during this same Demo Mode session.
     if (demoModeActive) {
+      const fullRoster = demoRosterFull || SAMPLE_ROSTER;
+      const fullClasses = demoClassesFull || SAMPLE_CLASSES;
+      if (!demoRosterFull) setDemoRosterFull(fullRoster);
+      if (!demoClassesFull) setDemoClassesFull(fullClasses);
       const scoped = selectedClassId === "none"
-        ? SAMPLE_ROSTER.filter((s) => !s.classId)
+        ? fullRoster.filter((s) => !s.classId)
         : selectedClassId
-        ? SAMPLE_ROSTER.filter((s) => s.classId === selectedClassId)
-        : SAMPLE_ROSTER;
+        ? fullRoster.filter((s) => s.classId === selectedClassId)
+        : fullRoster;
       setRoster(scoped);
-      setClassStats(scoped.length === SAMPLE_ROSTER.length ? SAMPLE_CLASS_STATS : null);
-      setClasses(SAMPLE_CLASSES);
+      setClassStats(scoped.length === fullRoster.length ? SAMPLE_CLASS_STATS : null);
+      setClasses(fullClasses);
       setRosterError(null);
       setRosterLoading(false);
       return;
@@ -7442,7 +7461,7 @@ function FileBoxScreen({ onBack, onCreateTargetedPassage }) {
       })
       .catch((e) => { if (requestId === rosterRequestRef.current) setRosterError(e.message || "Couldn't load the roster"); })
       .finally(() => { if (requestId === rosterRequestRef.current) setRosterLoading(false); });
-  }, [demoModeActive, selectedClassId, rosterRefreshKey]);
+  }, [demoModeActive, selectedClassId, rosterRefreshKey, demoRosterFull, demoClassesFull]);
 
   // Groups the currently-loaded roster by shared weakest-clue-type, e.g.
   // { antonym: [studentA, studentB], example: [studentC] } -- the single
@@ -7482,7 +7501,7 @@ function FileBoxScreen({ onBack, onCreateTargetedPassage }) {
     setClassActionBusy(true);
     setClassActionError(null);
     if (demoModeActive) {
-      setClasses((prev) => [...prev, { id: `demo-class-${Date.now()}`, name }]);
+      setDemoClassesFull((prev) => [...(prev || SAMPLE_CLASSES), { id: `demo-class-${Date.now()}`, name }]);
       setNewClassName("");
       setShowAddClass(false);
       setClassActionBusy(false);
@@ -7506,7 +7525,7 @@ function FileBoxScreen({ onBack, onCreateTargetedPassage }) {
     setClassActionBusy(true);
     setClassActionError(null);
     if (demoModeActive) {
-      setClasses((prev) => prev.map((c) => (c.id === classId ? { ...c, name } : c)));
+      setDemoClassesFull((prev) => (prev || SAMPLE_CLASSES).map((c) => (c.id === classId ? { ...c, name } : c)));
       setRenamingClassId(null);
       setClassActionBusy(false);
       return;
@@ -7525,7 +7544,13 @@ function FileBoxScreen({ onBack, onCreateTargetedPassage }) {
   async function handleAssignStudent(studentId, classId) {
     setClassActionError(null);
     if (demoModeActive) {
-      setRoster((prev) => prev.map((s) => (s.id === studentId ? { ...s, classId: classId || null } : s)));
+      // Writes to the persistent demo shadow, not the displayed `roster`
+      // directly -- the roster-loading effect re-scopes from this shadow
+      // whenever it changes, which both re-filters the currently-viewed
+      // class (dropping a student just moved OUT of it, exactly like a
+      // real re-fetch would) and keeps the move remembered if the teacher
+      // switches the class filter away and back again.
+      setDemoRosterFull((prev) => (prev || SAMPLE_ROSTER).map((s) => (s.id === studentId ? { ...s, classId: classId || null } : s)));
       return;
     }
     try {
@@ -7996,6 +8021,10 @@ function FileBoxScreen({ onBack, onCreateTargetedPassage }) {
           onCancel={() => setDeleteStudentTarget(null)}
           onConfirm={async () => {
             if (!demoModeActive) await deleteStudentAccount(deleteStudentTarget.id);
+            // Also written to the persistent demo shadow (not just the
+            // displayed `roster`), or this student reappears the moment
+            // the teacher switches the class filter away and back.
+            if (demoModeActive) setDemoRosterFull((prev) => (prev || SAMPLE_ROSTER).filter((r) => r.id !== deleteStudentTarget.id));
             setRoster((prev) => prev.filter((r) => r.id !== deleteStudentTarget.id));
             setDeleteStudentTarget(null);
             // The instant filter above keeps the list itself snappy, but
@@ -8014,6 +8043,11 @@ function FileBoxScreen({ onBack, onCreateTargetedPassage }) {
           onCancel={() => setDeleteClassTarget(null)}
           onConfirm={async () => {
             if (demoModeActive) {
+              // Written to the persistent demo shadow too -- otherwise
+              // this class (and its students' unassignment) reverts the
+              // next time the roster-loading effect re-scopes from it.
+              setDemoClassesFull((prev) => (prev || SAMPLE_CLASSES).filter((c) => c.id !== deleteClassTarget.id));
+              setDemoRosterFull((prev) => (prev || SAMPLE_ROSTER).map((s) => (s.classId === deleteClassTarget.id ? { ...s, classId: null } : s)));
               setClasses((prev) => prev.filter((c) => c.id !== deleteClassTarget.id));
               setRoster((prev) => prev.map((s) => (s.classId === deleteClassTarget.id ? { ...s, classId: null } : s)));
               if (selectedClassId === deleteClassTarget.id) setSelectedClassId(null);
