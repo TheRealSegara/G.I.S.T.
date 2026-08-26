@@ -4966,19 +4966,45 @@ function boldToHtml(text) {
   return html;
 }
 
-function buildReportHtml(studentId, log, summary) {
+// extra carries everything the live report shows that isn't derivable from
+// log/summary alone -- Class Pattern, History-derived comparisons, etc.
+// Every field defaults safely absent so a report with none of that context
+// (a first-ever session, or the sample report) still renders correctly.
+function buildReportHtml(studentId, log, summary, extra = {}) {
+  const {
+    comprehensionResult = null,
+    classPattern = null,
+    previousSession = null,
+    nextStepWeakest = null,
+    historyWeakest = null,
+    recurringWords = [],
+    otherSessions = [],
+    flaggedWords = [],
+  } = extra;
+  const glance = computeAtAGlance(log);
+  const concretenessBreakdown = computeConcretenessBreakdown(log);
+  const transferWord = log.find((e) => e.transferPassed !== null && e.transferPassed !== undefined);
+  const lowerFlagged = flaggedWords.map((w) => w.toLowerCase());
+
   const rows = log
-    .map(
-      (e, i) =>
-        `<tr><td>${escapeHtml(e.word)}</td><td style="text-transform:capitalize">${escapeHtml(e.clueType)}</td><td>${e.finalStage} — ${escapeHtml(stageLabelFor(e.finalStage, e, i))}</td><td>${e.hintsUsed}</td><td>${e.skipped ? "Skipped" : ""}</td></tr>`
-    )
+    .map((e, i) => {
+      const notes = [];
+      if (e.clueIdentified) notes.push(`🔎 "${escapeHtml(e.clueIdentified)}"`);
+      if (e.revealedMeaning) notes.push(`📖 Told: ${escapeHtml(e.revealedMeaning)}`);
+      const flag = lowerFlagged.includes(e.word.toLowerCase()) ? " 🚩" : "";
+      const noteHtml = notes.length ? `<br /><small>${notes.join("<br />")}</small>` : "";
+      return `<tr><td>${escapeHtml(e.word)}${flag}${noteHtml}</td><td style="text-transform:capitalize">${escapeHtml(e.clueType)}</td><td>${e.finalStage} — ${escapeHtml(stageLabelFor(e.finalStage, e, i))}</td><td>${e.hintsUsed}</td><td>${e.skipped ? "Skipped" : ""}</td></tr>`;
+    })
     .join("");
+
+  // AI-written sections, same as before minus Story Understanding, which
+  // now gets its own richer block (question + tie-back) built separately
+  // below instead of just the bare AI note.
   const sections = summary
     ? [
         { label: "📌 Summary", text: summary.summary, cls: "highlight" },
         { label: "🎯 The Pattern", text: summary.corePattern || summary.coreProblem, cls: "core" },
         { label: "🧠 How Reliable Is This", text: summary.howReliable, cls: "" },
-        { label: "📖 Story Understanding", text: summary.storyUnderstandingNote, cls: "" },
         { label: "💡 What To Try in Class", text: summary.whatToTry, cls: "rec" },
       ]
     : [];
@@ -4986,6 +5012,90 @@ function buildReportHtml(studentId, log, summary) {
     .filter((s) => s.text)
     .map((s) => `<div class="summary ${s.cls}"><h2>${s.label}</h2>${boldToHtml(s.text)}</div>`)
     .join("");
+
+  const storyUnderstandingHtml = summary
+    ? (() => {
+        const question = comprehensionResult && comprehensionResult.ran && comprehensionResult.question
+          ? `<p><em>"${escapeHtml(comprehensionResult.question)}"</em></p>`
+          : "";
+        const tieBack = comprehensionResult && comprehensionResult.ran && !comprehensionResult.correct
+          ? (() => {
+              const struggled = log.filter((e) => e.skipped || e.hintsUsed > 0).map((e) => e.word);
+              return struggled.length
+                ? `<p>🔢 Worth noting: this session also needed help with ${escapeHtml(struggled.join(", "))} — word-level gaps like these often line up with a missed comprehension check.</p>`
+                : "";
+            })()
+          : "";
+        return `<div class="summary"><h2>📖 Story Understanding</h2><p>Comprehension check: <strong>${
+          comprehensionResult && comprehensionResult.ran ? (comprehensionResult.correct ? "Correct ✓" : "Incorrect ✗") : "Not run this session"
+        }</strong></p>${question}${boldToHtml(summary.storyUnderstandingNote || "")}${tieBack}</div>`;
+      })()
+    : "";
+
+  // Evidence blocks: the same always-visible cards the live report shows,
+  // as static HTML -- this file used to only carry the AI's written
+  // sections and the raw table, missing everything the report added since.
+  const atAGlanceHtml = `<div class="evidence blue"><h3>📊 At a Glance</h3><p>Solved independently: <strong>${glance.independent}</strong> · Needed hints: <strong>${glance.withHelp}</strong> · Skipped: <strong>${glance.skipped.length}</strong></p>${
+    glance.breakdown.length ? `<p>${glance.breakdown.map((b) => `${escapeHtml(b.type)}: ${b.independent}/${b.total} independent`).join(" · ")}</p>` : ""
+  }</div>`;
+
+  const classPatternHtml = classPattern
+    ? `<div class="evidence blue"><h3>🏫 Class Pattern</h3><p><strong>${classPattern.matchingCount} students</strong> in ${escapeHtml(classPattern.className)} share this same gap — struggling specifically with <strong>${escapeHtml(classPattern.type)}</strong>-clue words: ${escapeHtml(classPattern.matchingNames.join(", "))}.</p>${
+        classPattern.classRoster
+          ? `<p>${classPattern.classRoster
+              .map((s) => `${escapeHtml(s.fullName)}${s.weakestClueType ? ` (weakest: ${escapeHtml(s.weakestClueType.type)}, ${s.weakestClueType.independent}/${s.weakestClueType.total})` : " (not enough data yet)"}`)
+              .join("; ")}</p>`
+          : ""
+      }</div>`
+    : "";
+
+  const growthHtml = (() => {
+    if (!otherSessions[0] || !(otherSessions[0].totalCount > 0)) return "";
+    const priorRate = Math.round((otherSessions[0].independentCount / otherSessions[0].totalCount) * 100);
+    const sessionSolved = glance.independent + glance.withHelp;
+    if (sessionSolved === 0) return "";
+    const currentRate = Math.round((glance.independent / sessionSolved) * 100);
+    const delta = currentRate - priorRate;
+    return `<div class="evidence blue"><h3>📈 Growth Over Time</h3><p><strong>${currentRate}%</strong> independent this time (${glance.independent}/${sessionSolved}) — ${
+      delta === 0 ? "same as" : delta > 0 ? "up from" : "down from"
+    } <strong>${priorRate}%</strong> (${otherSessions[0].independentCount}/${otherSessions[0].totalCount}) last session.</p></div>`;
+  })();
+
+  const recurringHtml = recurringWords.length > 0
+    ? `<div class="evidence blue"><h3>🔁 Recurring Words</h3><p>${recurringWords
+        .slice(0, 3)
+        .map(([w, h]) => `"${escapeHtml(w)}" (seen ${h.length}×)`)
+        .join(", ")}${recurringWords.length > 3 ? `, +${recurringWords.length - 3} more` : ""}.</p></div>`
+    : "";
+
+  const transferHtml = transferWord
+    ? `<div class="evidence ${transferWord.transferPassed ? "green" : "amber"}"><h3>🔄 Transfer Check</h3><p>${
+        transferWord.transferPassed
+          ? `Used <strong>${escapeHtml(transferWord.word)}</strong> correctly even in a brand-new sentence — real evidence of understanding, not just this passage.`
+          : `<strong>${escapeHtml(transferWord.word)}</strong> got trickier in a brand-new sentence — the meaning hasn't fully transferred yet.`
+      }</p></div>`
+    : "";
+
+  const concretenessHtml = concretenessBreakdown.length >= 2
+    ? `<div class="evidence blue"><h3>🧩 Concrete vs Abstract</h3><p>${concretenessBreakdown.map((b) => `${escapeHtml(b.type)}: ${b.independent}/${b.total} independent`).join(" · ")}</p></div>`
+    : "";
+
+  const suggestedNextStepHtml = nextStepWeakest
+    ? `<div class="evidence violet"><h3>🧭 Suggested Next Step</h3><p>Since <strong>${escapeHtml(nextStepWeakest.type)}</strong>-clue words have been ${escapeHtml(studentId)}'s biggest gap${
+        historyWeakest ? " across their sessions" : " today"
+      }, try a passage built specifically around <strong>${escapeHtml(nextStepWeakest.type)}</strong> clues to build on this practice.</p></div>`
+    : "";
+
+  const lastTimeHtml = previousSession && previousSession.whatToTry
+    ? `<div class="evidence violet"><h3>📝 Last Time We Tried</h3>${boldToHtml(previousSession.whatToTry)}${
+        previousSession.existingNotes ? `<p><em>Follow-up note: ${escapeHtml(previousSession.existingNotes)}</em></p>` : ""
+      }</div>`
+    : "";
+
+  const flaggedHtml = flaggedWords.length > 0
+    ? `<div class="evidence amber"><h3>🚩 Flagged for Re-teaching</h3><p>${flaggedWords.map((w) => escapeHtml(w)).join(", ")}</p></div>`
+    : "";
+
   // This file is meant to leave the app -- printed, saved as PDF, or
   // handed to a parent or another teacher who never saw the live G.I.S.T.
   // UI at all, so it can't lean on the in-app clue-type legend or
@@ -5012,6 +5122,7 @@ function buildReportHtml(studentId, log, summary) {
   table { width: 100%; border-collapse: collapse; background: #ffffff; }
   th, td { border: 1px solid #bfdbfe; padding: 8px 12px; text-align: left; font-size: 14px; background: #ffffff; color: #2a1a0f; }
   th { background: #dbeafe; }
+  td small { color: #57534e; font-style: italic; }
   .summary { margin-top: 16px; padding: 16px; border: 2px dashed #0d9488; background: #f0fdfa; color: #2a1a0f; line-height: 1.7; font-size: 15px; }
   .summary.highlight { border-color: #0d9488; background: #ccfbf1; border-style: solid; border-width: 3px; font-size: 17px; }
   .summary.core { border-color: #dc2626; background: #fee2e2; border-width: 3px; }
@@ -5021,6 +5132,13 @@ function buildReportHtml(studentId, log, summary) {
   .summary p.headline { font-weight: 700; font-size: 1.1em; margin-top: 0; }
   .summary ul { margin: 4px 0 10px 0; padding-left: 20px; }
   .summary li { margin: 3px 0; }
+  .evidence { margin-top: 16px; padding: 14px 16px; border-radius: 12px; border: 2px solid; font-size: 14px; line-height: 1.6; }
+  .evidence h3 { font-size: 13px; margin: 0 0 8px 0; text-transform: uppercase; letter-spacing: 0.03em; }
+  .evidence p { margin: 4px 0; }
+  .evidence.blue { border-color: #2563eb; background: #eff6ff; color: #1e3a5f; }
+  .evidence.violet { border-color: #7c3aed; background: #f5f3ff; color: #4c1d95; }
+  .evidence.green { border-color: #059669; background: #ecfdf5; color: #065f46; }
+  .evidence.amber { border-color: #d97706; background: #fffbeb; color: #78350f; }
   .key { margin-top: 14px; font-size: 12px; color: #57534e; }
   .legend { margin-top: 16px; padding: 14px 16px; border: 2px dashed #a8a29e; background: #fafaf9; border-radius: 12px; }
   .legend h3 { font-size: 13px; margin: 0 0 8px 0; text-transform: uppercase; letter-spacing: 0.03em; color: #57534e; }
@@ -5032,8 +5150,19 @@ function buildReportHtml(studentId, log, summary) {
   <h1>G.I.S.T. — Explorer's Field Journal</h1>
   <p><strong>Student / Class:</strong> ${escapeHtml(studentId)}</p>
   <p><strong>Words logged this session:</strong> ${log.length}</p>
-  ${sectionsHtml}
-  ${sections.length > 0 ? `<p class="key">🤖 The sections above are the AI's written analysis. 🔢 The table below is the raw, counted data it was written from — not AI.</p>` : ""}
+  ${sections.filter((s) => s.label === "📌 Summary" && s.text).map((s) => `<div class="summary ${s.cls}"><h2>${s.label}</h2>${boldToHtml(s.text)}</div>`).join("")}
+  ${classPatternHtml}
+  ${lastTimeHtml}
+  ${atAGlanceHtml}
+  ${storyUnderstandingHtml}
+  ${growthHtml}
+  ${recurringHtml}
+  ${transferHtml}
+  ${concretenessHtml}
+  ${sections.filter((s) => s.label !== "📌 Summary" && s.text).map((s) => `<div class="summary ${s.cls}"><h2>${s.label}</h2>${boldToHtml(s.text)}</div>`).join("")}
+  ${suggestedNextStepHtml}
+  ${flaggedHtml}
+  ${sections.length > 0 ? `<p class="key">🤖 Teal/red/amber boxes above are the AI's written analysis. 🔢 Blue/violet/green boxes and the table below are counted directly from the log — not AI.</p>` : ""}
   <div class="table-wrap">
     <table>
       <thead><tr><th>Word</th><th>Clue Type</th><th>Stage Reached</th><th>Hints</th><th></th></tr></thead>
@@ -5049,9 +5178,9 @@ function buildReportHtml(studentId, log, summary) {
 </html>`;
 }
 
-function downloadReport(studentId, log, summary) {
+function downloadReport(studentId, log, summary, extra) {
   try {
-    const html = buildReportHtml(studentId, log, summary);
+    const html = buildReportHtml(studentId, log, summary, extra);
     const blob = new Blob([html], { type: "text/html" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -5411,6 +5540,22 @@ function computeAtAGlance(log) {
     })
     .filter((b) => b.total > 0);
   return { total: log.length, independent, withHelp, skipped, breakdown };
+}
+
+// A second, completely unused axis of the exact same log data: every word
+// is already tagged abstract/concrete (see WORD_BANK/targetWord.concreteness)
+// the same way it's tagged by clue type, but until now nothing ever broke
+// performance down by it. A student can be fine with concrete words
+// ("bustling") yet consistently trip on abstract ones ("reluctant") --
+// a real, common vocabulary-acquisition pattern this data could already
+// show, for free.
+function computeConcretenessBreakdown(log) {
+  return ["concrete", "abstract"]
+    .map((c) => {
+      const words = log.filter((e) => e.concreteness === c && !e.skipped);
+      return { type: c, total: words.length, independent: words.filter((e) => e.hintsUsed === 0).length };
+    })
+    .filter((b) => b.total > 0);
 }
 
 // Plain-language definitions of the four context-clue categories, written
@@ -6536,7 +6681,16 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
   async function handleDownload() {
     SFX.tap();
     setDownloading(true);
-    const ok = downloadReport(studentId, log, summary);
+    const ok = downloadReport(studentId, log, summary, {
+      comprehensionResult,
+      classPattern: effectiveClassPattern,
+      previousSession,
+      nextStepWeakest,
+      historyWeakest,
+      recurringWords,
+      otherSessions,
+      flaggedWords,
+    });
     if (!ok) alert("Couldn't download the report. Please try again.");
     setDownloading(false);
   }
@@ -6858,24 +7012,26 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
               report regardless of whether it's actually true. */}
           {effectiveClassPattern && (
             <div className="p-5 rounded-3xl step-in" style={{ background: "linear-gradient(135deg,#eff6ff,#dbeafe)", border: "3px solid #2563eb", boxShadow: "0 3px 0 0 #1d4ed8" }}>
-              <p className="font-display font-800 text-xs uppercase tracking-wide text-blue-800 mb-2">
-                🏫 Class Pattern{" "}
-                {effectiveClassPattern.classRoster ? (
-                  <button
-                    type="button"
-                    onClick={() => { SFX.tap(); setShowClassRoster((s) => !s); }}
-                    className="ml-1 font-body font-800 text-[10px] normal-case tracking-normal text-white bg-blue-600 hover:bg-blue-700 rounded-full px-2 py-0.5 underline decoration-dotted underline-offset-2"
-                    aria-expanded={showClassRoster}
-                  >
-                    counted across {effectiveClassPattern.classSize} students {showClassRoster ? "▲" : "▼"}
-                  </button>
-                ) : (
-                  <span className="ml-1 font-body font-800 text-[10px] normal-case tracking-normal text-white bg-blue-600 rounded-full px-2 py-0.5">counted across {effectiveClassPattern.classSize} students</span>
-                )}
-              </p>
+              <p className="font-display font-800 text-xs uppercase tracking-wide text-blue-800 mb-2">🏫 Class Pattern</p>
               <p className="font-body text-sm text-blue-900 leading-relaxed">
                 <b>{effectiveClassPattern.matchingCount} students</b> in {effectiveClassPattern.className} share this same gap — struggling specifically with <b className="capitalize">{effectiveClassPattern.type}</b>-clue words: {effectiveClassPattern.matchingNames.join(", ")}.
               </p>
+              {/* Was a tiny inline pill next to the title -- easy to miss as
+                  clickable at all. Now its own full-width button, directly
+                  under the claim it's evidence for, so the size and
+                  placement both say "tap me" instead of just the wording. */}
+              {effectiveClassPattern.classRoster ? (
+                <button
+                  type="button"
+                  onClick={() => { SFX.tap(); setShowClassRoster((s) => !s); }}
+                  aria-expanded={showClassRoster}
+                  className="w-full mt-3 flex items-center justify-center gap-2 font-display font-800 text-sm text-white bg-blue-600 hover:bg-blue-700 active:scale-[0.99] rounded-2xl px-5 py-3 transition-all shadow-sm"
+                >
+                  👀 See all {effectiveClassPattern.classSize} students counted {showClassRoster ? "▲" : "▼"}
+                </button>
+              ) : (
+                <span className="mt-3 inline-block font-body font-800 text-[10px] normal-case tracking-normal text-white bg-blue-600 rounded-full px-2 py-0.5">counted across {effectiveClassPattern.classSize} students</span>
+              )}
               {showClassRoster && effectiveClassPattern.classRoster && (
                 <div className="mt-3 p-3 rounded-2xl bg-white step-in" style={{ border: "2px solid #93c5fd" }}>
                   <p className="font-display font-800 text-[11px] uppercase tracking-wide text-blue-700 mb-2">Everyone counted in this {effectiveClassPattern.classSize}</p>
@@ -7011,25 +7167,28 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
             </div>
           </div>
 
-          {/* Growth Since Last Session: promoted out of At a Glance into
-              its own card -- a session-over-session comparison is a
-              distinct claim from this session's own counts, and deserved
-              its own visual weight rather than being a couple of lines a
-              teacher could skim past. */}
+          {/* Growth Over Time: promoted out of At a Glance into its own
+              card -- a session-over-session comparison is a distinct claim
+              from this session's own counts, and deserved its own visual
+              weight rather than being a couple of lines a teacher could
+              skim past. Now also carries the full sparkline (moved out of
+              History, where it was the exact same chart shown a second
+              time behind a click) so the trend and the one-line takeaway
+              live together instead of two resolutions of the same story
+              split across two places. */}
           {hasHistory && otherSessions[0] && otherSessions[0].totalCount > 0 && (() => {
             const priorRate = Math.round((otherSessions[0].independentCount / otherSessions[0].totalCount) * 100);
             const sessionSolved = glance.independent + glance.withHelp;
             if (sessionSolved === 0) return null;
             const currentRate = Math.round((glance.independent / sessionSolved) * 100);
             const delta = currentRate - priorRate;
-            const arrow = delta > 0 ? "📈" : delta < 0 ? "📉" : "➡️";
             return (
               <div className="p-5 rounded-3xl" style={{ background: "#dbeafe", border: "3px solid #2563eb" }}>
-                <p className="font-display font-800 text-xs uppercase tracking-wide text-blue-800 mb-2">{arrow} Growth Since Last Session</p>
-                <p className="font-body text-sm text-blue-900 leading-relaxed">
+                <p className="font-display font-800 text-xs uppercase tracking-wide text-blue-800 mb-2">📈 Growth Over Time</p>
+                <IndependentRateChart sessions={pastSessions} />
+                <p className="font-body text-sm text-blue-900 leading-relaxed mt-3">
                   <b>{currentRate}%</b> independent this time ({glance.independent}/{sessionSolved}) — {delta === 0 ? "same as" : delta > 0 ? "up from" : "down from"} <b>{priorRate}%</b> ({otherSessions[0].independentCount}/{otherSessions[0].totalCount}) last session.
                 </p>
-                <p className="font-body text-[11px] text-blue-600 mt-2">🔢 Counted directly from logged history, not AI</p>
               </div>
             );
           })()}
@@ -7057,6 +7216,48 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
               )}
             </div>
           )}
+
+          {/* Transfer Check: the strongest single signal the app collects
+              for "did they actually learn this word, not just pattern-match
+              the passage" -- a word that reached the transfer-test stage
+              gets a brand-new sentence, no scaffolding, and the student
+              already sees the result on their own recap screen. It never
+              reached the teacher's report at all until now. */}
+          {(() => {
+            const transferWord = log.find((e) => e.transferPassed !== null && e.transferPassed !== undefined);
+            if (!transferWord) return null;
+            const passed = transferWord.transferPassed;
+            return (
+              <div className="p-5 rounded-3xl" style={{ background: passed ? "#d1fae5" : "#fef3c7", border: `3px solid ${passed ? "#059669" : "#d97706"}` }}>
+                <p className="font-display font-800 text-xs uppercase tracking-wide mb-2" style={{ color: passed ? "#065f46" : "#92400e" }}>🔄 Transfer Check</p>
+                <p className="font-body text-sm leading-relaxed" style={{ color: passed ? "#065f46" : "#78350f" }}>
+                  {passed
+                    ? <>Used <b className="capitalize">{transferWord.word}</b> correctly even in a brand-new sentence — real evidence they understand the word, not just this passage.</>
+                    : <><b className="capitalize">{transferWord.word}</b> got trickier once it appeared in a brand-new sentence — a sign the meaning hasn't fully transferred beyond this passage yet.</>}
+                </p>
+                <p className="font-body text-[11px] mt-2" style={{ color: passed ? "#059669" : "#b45309" }}>🔢 Counted directly from the log, not AI</p>
+              </div>
+            );
+          })()}
+
+          {/* Concrete vs Abstract: the same breakdown treatment clue type
+              already gets (bars, weakest-type framing), applied to the
+              other axis every word is already tagged with. */}
+          {(() => {
+            const concretenessBreakdown = computeConcretenessBreakdown(log);
+            if (concretenessBreakdown.length < 2) return null;
+            return (
+              <div className="p-5 rounded-3xl" style={{ background: "#dbeafe", border: "3px solid #2563eb" }}>
+                <p className="font-display font-800 text-xs uppercase tracking-wide text-blue-800 mb-3">🧩 Concrete vs Abstract</p>
+                <div className="space-y-1.5 text-blue-800">
+                  {concretenessBreakdown.map((b) => (
+                    <ClueTypeBar key={b.type} type={b.type} independent={b.independent} total={b.total} colorClass="bg-blue-600" trackClass="bg-blue-100" />
+                  ))}
+                </div>
+                <p className="font-body text-[11px] text-blue-600 mt-3">🔢 Counted directly from the log, not AI</p>
+              </div>
+            );
+          })()}
 
           <div className="text-center">
             <button
@@ -7154,7 +7355,9 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
                   </p>
                 </div>
 
-                <IndependentRateChart sessions={pastSessions} />
+                {/* The sparkline itself now lives in the always-visible
+                    Growth Over Time card above -- showing it again here
+                    would just be the same chart a second time. */}
 
                 {/* Item 6: a persistent skill profile, not just this one
                     session's ~5-word sample -- the full per-clue-type
@@ -7279,6 +7482,18 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
                     <td className="px-4 py-3 font-display font-700 text-stone-700">
                       {entry.word}
                       {entry.skipped && <span className="ml-2 font-body font-700 text-[10px] uppercase text-rose-700 bg-rose-100 px-2 py-0.5 rounded-full">Skipped</span>}
+                      {/* Real per-word evidence that was already being
+                          captured and sent to the AI, but never shown to
+                          the teacher directly: the actual phrase the
+                          student pointed to as their clue, or the exact
+                          definition they were given when a word was
+                          skipped/auto-revealed. */}
+                      {entry.clueIdentified && (
+                        <p className="font-body font-400 text-[11px] text-stone-500 italic mt-0.5 normal-case">🔎 "{entry.clueIdentified}"</p>
+                      )}
+                      {entry.revealedMeaning && (
+                        <p className="font-body font-400 text-[11px] text-stone-500 italic mt-0.5 normal-case">📖 Told: {entry.revealedMeaning}</p>
+                      )}
                     </td>
                     {showMapColumn && <td className="px-4 py-3 font-body text-xs text-stone-600">{entry.passageTitle || "—"}</td>}
                     <td className="px-4 py-3 font-body text-xs text-stone-600 capitalize">{entry.clueType}</td>
