@@ -3037,7 +3037,7 @@ function CloseConfirmModal({ onCancel, onConfirm, screen, studentId }) {
 // many focusable controls (8 animal buttons plus Cancel/Confirm), so the
 // trap here cycles through every focusable element inside the dialog
 // rather than hardcoding first/last refs.
-function ResetSecretModal({ student, onCancel, onReset }) {
+function ResetSecretModal({ student, onCancel, onReset, demoMode }) {
   const [secret, setSecret] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -3074,6 +3074,10 @@ function ResetSecretModal({ student, onCancel, onReset }) {
     SFX.click();
     setLoading(true);
     setError(null);
+    if (demoMode) {
+      setTimeout(() => { setLoading(false); onReset(); }, 350);
+      return;
+    }
     try {
       await resetStudentSecret(student.id, secret);
       onReset();
@@ -5460,10 +5464,10 @@ const SAMPLE_SUMMARY = {
 // agree on the same headline gap instead of naming two different clue types.
 const SAMPLE_CLASS_PATTERN = {
   type: "definition",
-  matchingCount: 5,
-  classSize: 28,
+  matchingCount: 3,
+  classSize: 3,
   className: "4A",
-  matchingNames: ["Sample Student", "Aisha", "Marcus", "Ravi", "Siti"],
+  matchingNames: ["Sample Student", "Aisha", "Marcus"],
 };
 
 // Everything below (SAMPLE_STUDENT_STATS/PAST_SESSIONS/WORD_HISTORY/
@@ -5563,6 +5567,214 @@ const SAMPLE_WORD_HISTORY = {
 // the first Pet Show Day attempt (said "yes" but still needed a hint),
 // contradictions counts "exhausted" (said "no" but then said they knew it).
 const SAMPLE_CALIBRATION = { overconfidence: 1, contradictions: 1, sampleSize: 15 };
+
+// Everything below exists so File Box itself has something to demo in
+// Demo Mode -- previously it always hit the real roster API regardless,
+// so a teacher exploring Demo Mode could see one canned student's own
+// report but never the class-wide roster/rollup/"Shared Patterns"
+// experience at all. Three students (reusing "Sample Student" above, plus
+// two classmates), all sharing the same definition-clue gap, in one class
+// -- enough to show the whole pipeline reaching classroom scale, not just
+// one student.
+const SAMPLE_CLASS_ID = "sample-class-4a";
+
+const SAMPLE_STUDENT_SESSION_3_SUMMARY = SAMPLE_SUMMARY;
+const SAMPLE_STUDENT_FILEBOX_SESSIONS = [
+  {
+    id: "sample-session-3",
+    passageTitle: "Pet Show Day",
+    passageEmoji: "🐾",
+    startedAt: new Date(Date.now() - 600000).toISOString(),
+    finishedAt: new Date(Date.now() - 100000).toISOString(),
+    comprehensionCorrect: true,
+    teacherNotes: null,
+    independentCount: 3,
+    totalCount: 4,
+    _demoLog: SAMPLE_LOG,
+    _demoDiagnosticReport: SAMPLE_STUDENT_SESSION_3_SUMMARY,
+  },
+  ...SAMPLE_PAST_SESSIONS,
+];
+
+const SAMPLE_AISHA_SESSION_A_LOG = [
+  { word: "reluctant", clueType: "contrast", finalStage: 1, hintsUsed: 0, skipped: false, priorKnowledge: "no", gotItVia: "clues" },
+  { word: "enormous", clueType: "definition", finalStage: 1, hintsUsed: 0, skipped: false, priorKnowledge: "yes", gotItVia: "knew" },
+  { word: "curious", clueType: "example", finalStage: 1, hintsUsed: 0, skipped: false, priorKnowledge: "no", gotItVia: "clues" },
+  { word: "damp", clueType: "inference", finalStage: 2, hintsUsed: 1, skipped: false, priorKnowledge: "not_sure", gotItVia: "clues" },
+  { word: "gentle", clueType: "contrast", finalStage: 1, hintsUsed: 0, skipped: false, priorKnowledge: "no", gotItVia: "clues" },
+];
+const SAMPLE_AISHA_SESSION_B_LOG = [
+  { word: "sturdy", clueType: "definition", finalStage: 2, hintsUsed: 1, skipped: false, priorKnowledge: "not_sure", gotItVia: "clues" },
+  { word: "skillful", clueType: "example", finalStage: 1, hintsUsed: 0, skipped: false, priorKnowledge: "no", gotItVia: "clues" },
+  { word: "vivid", clueType: "inference", finalStage: 1, hintsUsed: 0, skipped: false, priorKnowledge: "no", gotItVia: "clues" },
+  { word: "anxious", clueType: "definition", finalStage: 2, hintsUsed: 1, skipped: false, priorKnowledge: "yes", gotItVia: "clues" },
+  { word: "triumphant", clueType: "contrast", finalStage: 1, hintsUsed: 0, skipped: false, priorKnowledge: "no", gotItVia: "clues" },
+];
+const SAMPLE_AISHA_SESSION_A_SUMMARY = {
+  summary: "Aisha understands words that are explained directly or contrasted right in the sentence, and is starting to handle indirect clues too.",
+  corePattern: "**Strong overall, with indirect clues as the one remaining stretch.**\n\n- **reluctant**, **enormous**, **curious**, and **gentle** were all solved independently, across three different clue types.\n- **damp** needed a hint — its explanation ('it had just rained') sits in the sentence right after, not inside the word's own sentence.\n- This means Aisha is comfortable with clues that are stated directly; the gap only shows up when she has to connect a detail from a nearby sentence herself.",
+  howReliable: "**Trustworthy — self-reports matched what actually happened.**\n\n- Said they already knew **enormous** beforehand, then solved it independently with no hints — a consistent, trustworthy self-report.",
+  storyUnderstandingNote: "Comprehension check passed on the first try, showing she followed the sanctuary trip's actual events, not just the individual words.",
+  whatToTry: "**Practice connecting a clue from the NEXT sentence, not just the word's own.**\n\n- **damp** is the one example this session where the explanation was a full sentence away.\n- Try saying: \"Keep reading one more sentence before you decide what it means.\"",
+};
+const SAMPLE_AISHA_SESSION_B_SUMMARY = {
+  summary: "Aisha did well overall this session, but both words that needed a hint were ones where the meaning is stated directly rather than shown through action.",
+  corePattern: "**A repeat pattern: words defined outright are the one soft spot.**\n\n- **skillful**, **vivid**, and **triumphant** were all solved independently.\n- **sturdy** and **anxious** both needed a hint — both are the kind of word a passage tends to explain outright (\"strong enough to survive the wind\", a worry named directly) rather than show through what a character does.\n- This matches the same gap from her last tracked session with **damp** — a persistent pattern, not a one-off.",
+  howReliable: "**Mostly trustworthy, with one self-report to double check.**\n\n- Said **anxious** was already known, then still needed a hint to land it — worth a quick check next time she claims prior knowledge on a new word.",
+  storyUnderstandingNote: "No whole-passage comprehension check ran this session.",
+  whatToTry: "**Give a quick example of a word explained outright, then ask her to restate it in her own words.**\n\n- **sturdy** and **anxious** were both explained directly in their own sentence, yet still needed a hint — the gap is in trusting a stated explanation, not finding one.\n- Try saying: \"The sentence already told you what it means — read it once more, slowly.\"",
+};
+const SAMPLE_AISHA_SESSIONS = [
+  {
+    id: "sample-aisha-session-2",
+    passageTitle: "The Kite Festival",
+    passageEmoji: "🪁",
+    startedAt: new Date(Date.now() - 3 * ONE_DAY_MS).toISOString(),
+    finishedAt: new Date(Date.now() - 3 * ONE_DAY_MS + 900000).toISOString(),
+    comprehensionCorrect: null,
+    teacherNotes: null,
+    independentCount: 3,
+    totalCount: 5,
+    _demoLog: SAMPLE_AISHA_SESSION_B_LOG,
+    _demoDiagnosticReport: SAMPLE_AISHA_SESSION_B_SUMMARY,
+    _demoWhatToTry: SAMPLE_AISHA_SESSION_B_SUMMARY.whatToTry,
+    _demoExistingNotes: "",
+  },
+  {
+    id: "sample-aisha-session-1",
+    passageTitle: "A Trip to the Sanctuary",
+    passageEmoji: "🌴",
+    startedAt: new Date(Date.now() - 10 * ONE_DAY_MS).toISOString(),
+    finishedAt: new Date(Date.now() - 10 * ONE_DAY_MS + 900000).toISOString(),
+    comprehensionCorrect: true,
+    teacherNotes: null,
+    independentCount: 4,
+    totalCount: 5,
+    _demoLog: SAMPLE_AISHA_SESSION_A_LOG,
+    _demoDiagnosticReport: SAMPLE_AISHA_SESSION_A_SUMMARY,
+  },
+];
+
+const SAMPLE_MARCUS_SESSION_A_LOG = [
+  { word: "aroma", clueType: "definition", finalStage: 2, hintsUsed: 1, skipped: false, priorKnowledge: "not_sure", gotItVia: "clues" },
+  { word: "cautious", clueType: "contrast", finalStage: 1, hintsUsed: 0, skipped: false, priorKnowledge: "no", gotItVia: "clues" },
+  { word: "dazzling", clueType: "example", finalStage: 1, hintsUsed: 0, skipped: false, priorKnowledge: "no", gotItVia: "clues" },
+  { word: "hospitable", clueType: "inference", finalStage: 2, hintsUsed: 1, skipped: false, priorKnowledge: "not_sure", gotItVia: "clues" },
+  { word: "content", clueType: "inference", finalStage: 1, hintsUsed: 0, skipped: false, priorKnowledge: "no", gotItVia: "clues" },
+];
+const SAMPLE_MARCUS_SESSION_B_LOG = [
+  { word: "sturdy", clueType: "definition", finalStage: 2, hintsUsed: 1, skipped: false, priorKnowledge: "not_sure", gotItVia: "clues" },
+  { word: "skillful", clueType: "example", finalStage: 1, hintsUsed: 0, skipped: false, priorKnowledge: "no", gotItVia: "clues" },
+  { word: "vivid", clueType: "inference", finalStage: 1, hintsUsed: 0, skipped: false, priorKnowledge: "no", gotItVia: "clues" },
+  { word: "anxious", clueType: "definition", finalStage: 1, hintsUsed: 0, skipped: true, skipReason: "stuck_limit", revealedMeaning: "\"anxious\" means feeling worried or nervous.", priorKnowledge: "no", gotItVia: null },
+  { word: "triumphant", clueType: "contrast", finalStage: 1, hintsUsed: 0, skipped: false, priorKnowledge: "no", gotItVia: "clues" },
+];
+const SAMPLE_MARCUS_SESSION_A_SUMMARY = {
+  summary: "Marcus followed the story well overall, but words explained outright were harder for him to land than words shown through example or contrast.",
+  corePattern: "**Definitions stated outright are the current gap, not the vocabulary itself.**\n\n- **cautious**, **dazzling**, and **content** were all solved independently.\n- **aroma** and **hospitable** both needed a hint — both are explained directly in their own sentence (\"that... smell... is called an aroma\"), which turned out harder to use than a contrast or example clue.\n- This means Marcus reads for the overall scene well; the specific skill still forming is trusting a definition stated outright rather than needing to see the word in action.",
+  howReliable: "**Reasonably trustworthy — no guess-speed answers this session.**\n\n- Said **aroma** and **hospitable** were both \"not sure\" beforehand, then needed a hint on both — a consistent, honest self-report rather than a contradiction.",
+  storyUnderstandingNote: "No whole-passage comprehension check ran this session.",
+  whatToTry: "**Read the defining sentence out loud together, then ask him to reuse it in his own sentence.**\n\n- **aroma** is a clean example: \"is called an aroma\" states the meaning directly, right there to lean on.\n- Try saying: \"The sentence just told you what it means — find that part and read it again.\"",
+};
+const SAMPLE_MARCUS_SESSION_B_SUMMARY = {
+  summary: "Marcus needed direct help with one word this session and is still building confidence with words a passage explains outright.",
+  corePattern: "**The same gap as last time: definition-clue words, now including one that needed a direct answer.**\n\n- **skillful**, **vivid**, and **triumphant** were all solved independently.\n- **sturdy** needed a hint, and **anxious** had to be revealed after several tries — both definition-clue words, matching the exact gap from his last tracked session with **aroma** and **hospitable**.\n- This is a persistent pattern across two sessions now, not a one-off word.",
+  howReliable: "**Trustworthy, with one word needing direct follow-up.**\n\n- **anxious** is flagged as needing direct teacher follow-up rather than folded into the pattern above — a genuinely stuck word, not just a slow one.",
+  storyUnderstandingNote: "No whole-passage comprehension check ran this session.",
+  whatToTry: "**Re-teach \"anxious\" directly, then give one more definition-clue word to practice the same move.**\n\n- **anxious** needed a direct answer both this session and structurally matches **sturdy**'s same gap — worth a short one-on-one moment before the next passage.\n- Try saying: \"Let's find the exact words that tell us what this feeling is, together.\"",
+};
+const SAMPLE_MARCUS_SESSIONS = [
+  {
+    id: "sample-marcus-session-2",
+    passageTitle: "The Kite Festival",
+    passageEmoji: "🪁",
+    startedAt: new Date(Date.now() - 2 * ONE_DAY_MS).toISOString(),
+    finishedAt: new Date(Date.now() - 2 * ONE_DAY_MS + 900000).toISOString(),
+    comprehensionCorrect: null,
+    teacherNotes: null,
+    independentCount: 3,
+    totalCount: 4,
+    _demoLog: SAMPLE_MARCUS_SESSION_B_LOG,
+    _demoDiagnosticReport: SAMPLE_MARCUS_SESSION_B_SUMMARY,
+    _demoWhatToTry: SAMPLE_MARCUS_SESSION_B_SUMMARY.whatToTry,
+    _demoExistingNotes: "",
+  },
+  {
+    id: "sample-marcus-session-1",
+    passageTitle: "The Night Market",
+    passageEmoji: "🏮",
+    startedAt: new Date(Date.now() - 12 * ONE_DAY_MS).toISOString(),
+    finishedAt: new Date(Date.now() - 12 * ONE_DAY_MS + 900000).toISOString(),
+    comprehensionCorrect: false,
+    teacherNotes: null,
+    independentCount: 3,
+    totalCount: 5,
+    _demoLog: SAMPLE_MARCUS_SESSION_A_LOG,
+    _demoDiagnosticReport: SAMPLE_MARCUS_SESSION_A_SUMMARY,
+  },
+];
+
+// Roster rows match fetchTeacherRoster's real response shape exactly
+// (id/fullName/createdAt/lastLoginAt/classId/sessionCount/lastSessionAt/
+// weakestClueType) -- hand-computed from the session logs above, same
+// discipline as the rest of this file's SAMPLE_ data.
+const SAMPLE_ROSTER = [
+  {
+    id: "sample-demo-1",
+    fullName: "Sample Student",
+    createdAt: new Date(Date.now() - 20 * ONE_DAY_MS).toISOString(),
+    lastLoginAt: new Date(Date.now() - 100000).toISOString(),
+    classId: SAMPLE_CLASS_ID,
+    sessionCount: 3,
+    lastSessionAt: SAMPLE_STUDENT_FILEBOX_SESSIONS[0].finishedAt,
+    weakestClueType: { type: "definition", independent: 1, total: 3 },
+  },
+  {
+    id: "sample-demo-2",
+    fullName: "Aisha",
+    createdAt: new Date(Date.now() - 15 * ONE_DAY_MS).toISOString(),
+    lastLoginAt: SAMPLE_AISHA_SESSIONS[0].finishedAt,
+    classId: SAMPLE_CLASS_ID,
+    sessionCount: 2,
+    lastSessionAt: SAMPLE_AISHA_SESSIONS[0].finishedAt,
+    weakestClueType: { type: "definition", independent: 1, total: 3 },
+  },
+  {
+    id: "sample-demo-3",
+    fullName: "Marcus",
+    createdAt: new Date(Date.now() - 12 * ONE_DAY_MS).toISOString(),
+    lastLoginAt: SAMPLE_MARCUS_SESSIONS[0].finishedAt,
+    classId: SAMPLE_CLASS_ID,
+    sessionCount: 2,
+    lastSessionAt: SAMPLE_MARCUS_SESSIONS[0].finishedAt,
+    weakestClueType: { type: "definition", independent: 0, total: 2 },
+  },
+];
+
+const SAMPLE_CLASSES = [{ id: SAMPLE_CLASS_ID, name: "4A" }];
+
+// Pooled across all 3 students' sessions above, same math as
+// computeStatsBreakdown in api/_teacherRosterHandler.js -- every number
+// here is hand-summed from the individual logs, not independently made up.
+const SAMPLE_CLASS_STATS = {
+  total: 35,
+  independent: 22,
+  withHelp: 10,
+  skipped: 3,
+  studentCount: 3,
+  breakdown: [
+    { type: "contrast", total: 8, independent: 8 },
+    { type: "definition", total: 8, independent: 2 },
+    { type: "example", total: 8, independent: 8 },
+    { type: "inference", total: 8, independent: 4 },
+  ],
+};
+
+const SAMPLE_SESSIONS_BY_STUDENT = {
+  "sample-demo-1": SAMPLE_STUDENT_FILEBOX_SESSIONS,
+  "sample-demo-2": SAMPLE_AISHA_SESSIONS,
+  "sample-demo-3": SAMPLE_MARCUS_SESSIONS,
+};
 
 function TourScreen({ avatarConfig, passage, onDone, bilingual, onToggleBilingual, standalone = false }) {
   const [page, setPage] = useState(0);
@@ -7024,6 +7236,7 @@ function BuildYourOwnScreen({ onBack }) {
 // three share the same back-and-forth navigation and none of them are
 // ever reachable except through this one entry point.
 function FileBoxScreen({ onBack, onCreateTargetedPassage }) {
+  const demoModeActive = useDemoMode();
   const [view, setView] = useState("roster"); // "roster" | "sessions" | "detail"
   const [roster, setRoster] = useState(null);
   const [classStats, setClassStats] = useState(null);
@@ -7061,6 +7274,22 @@ function FileBoxScreen({ onBack, onCreateTargetedPassage }) {
 
   const rosterRequestRef = useRef(0);
   useEffect(() => {
+    // Demo Mode: build the same shape straight from the canned fixtures
+    // instead of hitting the network, so File Box shows a full 3-student
+    // roster/class immediately with no real access code or backend.
+    if (demoModeActive) {
+      const scoped = selectedClassId === "none"
+        ? SAMPLE_ROSTER.filter((s) => !s.classId)
+        : selectedClassId
+        ? SAMPLE_ROSTER.filter((s) => s.classId === selectedClassId)
+        : SAMPLE_ROSTER;
+      setRoster(scoped);
+      setClassStats(scoped.length === SAMPLE_ROSTER.length ? SAMPLE_CLASS_STATS : null);
+      setClasses(SAMPLE_CLASSES);
+      setRosterError(null);
+      setRosterLoading(false);
+      return;
+    }
     setRosterLoading(true);
     setRosterError(null);
     const requestId = ++rosterRequestRef.current;
@@ -7073,7 +7302,7 @@ function FileBoxScreen({ onBack, onCreateTargetedPassage }) {
       })
       .catch((e) => { if (requestId === rosterRequestRef.current) setRosterError(e.message || "Couldn't load the roster"); })
       .finally(() => { if (requestId === rosterRequestRef.current) setRosterLoading(false); });
-  }, [selectedClassId, rosterRefreshKey]);
+  }, [demoModeActive, selectedClassId, rosterRefreshKey]);
 
   // Groups the currently-loaded roster by shared weakest-clue-type, e.g.
   // { antonym: [studentA, studentB], example: [studentC] } -- the single
@@ -7112,6 +7341,13 @@ function FileBoxScreen({ onBack, onCreateTargetedPassage }) {
     if (!name || classActionBusy) return;
     setClassActionBusy(true);
     setClassActionError(null);
+    if (demoModeActive) {
+      setClasses((prev) => [...prev, { id: `demo-class-${Date.now()}`, name }]);
+      setNewClassName("");
+      setShowAddClass(false);
+      setClassActionBusy(false);
+      return;
+    }
     try {
       await createClass(name);
       setNewClassName("");
@@ -7129,6 +7365,12 @@ function FileBoxScreen({ onBack, onCreateTargetedPassage }) {
     if (!name || classActionBusy) return;
     setClassActionBusy(true);
     setClassActionError(null);
+    if (demoModeActive) {
+      setClasses((prev) => prev.map((c) => (c.id === classId ? { ...c, name } : c)));
+      setRenamingClassId(null);
+      setClassActionBusy(false);
+      return;
+    }
     try {
       await renameClass(classId, name);
       setRenamingClassId(null);
@@ -7142,6 +7384,10 @@ function FileBoxScreen({ onBack, onCreateTargetedPassage }) {
 
   async function handleAssignStudent(studentId, classId) {
     setClassActionError(null);
+    if (demoModeActive) {
+      setRoster((prev) => prev.map((s) => (s.id === studentId ? { ...s, classId: classId || null } : s)));
+      return;
+    }
     try {
       await assignStudentToClass(studentId, classId || null);
       setRosterRefreshKey((k) => k + 1);
@@ -7163,8 +7409,14 @@ function FileBoxScreen({ onBack, onCreateTargetedPassage }) {
     setSelectedStudent(student);
     setSessions(null);
     setSessionsError(null);
-    setSessionsLoading(true);
     setView("sessions");
+    if (demoModeActive) {
+      const demoSessions = (SAMPLE_SESSIONS_BY_STUDENT[student.id] || []).map((s) => ({ ...s, wordCount: s.totalCount }));
+      setSessions(demoSessions);
+      setSessionsLoading(false);
+      return;
+    }
+    setSessionsLoading(true);
     const requestId = ++sessionsRequestRef.current;
     fetchStudentSessions(student.id)
       .then((data) => { if (requestId === sessionsRequestRef.current) setSessions(data.sessions); })
@@ -7177,8 +7429,27 @@ function FileBoxScreen({ onBack, onCreateTargetedPassage }) {
     setSelectedSession(session);
     setSessionDetail(null);
     setDetailError(null);
-    setDetailLoading(true);
     setView("detail");
+    if (demoModeActive) {
+      setSessionDetail({
+        session: {
+          id: session.id,
+          studentId: selectedStudent.id,
+          studentName: selectedStudent.fullName,
+          passageTitle: session.passageTitle,
+          passageEmoji: session.passageEmoji,
+          startedAt: session.startedAt,
+          finishedAt: session.finishedAt,
+          comprehensionResult: session.comprehensionCorrect === null ? null : { correct: session.comprehensionCorrect },
+          diagnosticReport: session._demoDiagnosticReport || null,
+          teacherNotes: session.teacherNotes,
+        },
+        log: session._demoLog || [],
+      });
+      setDetailLoading(false);
+      return;
+    }
+    setDetailLoading(true);
     const requestId = ++detailRequestRef.current;
     fetchSessionDetail(session.id)
       .then((data) => { if (requestId === detailRequestRef.current) setSessionDetail(data); })
@@ -7204,6 +7475,7 @@ function FileBoxScreen({ onBack, onCreateTargetedPassage }) {
           hideResetSection
           classPattern={detailStudent ? classPatternFor(detailStudent) : null}
           onCreateTargetedPassage={onCreateTargetedPassage}
+          isDemo={demoModeActive}
         />
       );
     }
@@ -7285,7 +7557,7 @@ function FileBoxScreen({ onBack, onCreateTargetedPassage }) {
             message={`This permanently deletes the "${deleteSessionTarget.passageTitle}" session from ${new Date(deleteSessionTarget.finishedAt).toLocaleDateString()} and its full word log.`}
             onCancel={() => setDeleteSessionTarget(null)}
             onConfirm={async () => {
-              await deleteSession(deleteSessionTarget.id);
+              if (!demoModeActive) await deleteSession(deleteSessionTarget.id);
               const remaining = sessions.filter((sess) => sess.id !== deleteSessionTarget.id);
               setSessions(remaining);
               // Keep the roster screen's cached sessionCount/lastSessionAt
@@ -7549,6 +7821,7 @@ function FileBoxScreen({ onBack, onCreateTargetedPassage }) {
           student={resetTarget}
           onCancel={() => setResetTarget(null)}
           onReset={() => { setResetSuccessName(resetTarget.fullName); setResetTarget(null); }}
+          demoMode={demoModeActive}
         />
       )}
 
@@ -7558,13 +7831,14 @@ function FileBoxScreen({ onBack, onCreateTargetedPassage }) {
           message={`This permanently deletes ${deleteStudentTarget.fullName} and every one of their ${deleteStudentTarget.sessionCount} session${deleteStudentTarget.sessionCount === 1 ? "" : "s"}.`}
           onCancel={() => setDeleteStudentTarget(null)}
           onConfirm={async () => {
-            await deleteStudentAccount(deleteStudentTarget.id);
+            if (!demoModeActive) await deleteStudentAccount(deleteStudentTarget.id);
             setRoster((prev) => prev.filter((r) => r.id !== deleteStudentTarget.id));
             setDeleteStudentTarget(null);
             // The instant filter above keeps the list itself snappy, but
             // classStats (studentCount/totals) needs a real refetch to
             // stay accurate now that this student's words are gone.
-            setRosterRefreshKey((k) => k + 1);
+            if (!demoModeActive) setRosterRefreshKey((k) => k + 1);
+            else setClassStats(null);
           }}
         />
       )}
@@ -7575,6 +7849,13 @@ function FileBoxScreen({ onBack, onCreateTargetedPassage }) {
           message={`This deletes the class itself, not its students — they move back to "Unassigned", nothing about their accounts or progress changes.`}
           onCancel={() => setDeleteClassTarget(null)}
           onConfirm={async () => {
+            if (demoModeActive) {
+              setClasses((prev) => prev.filter((c) => c.id !== deleteClassTarget.id));
+              setRoster((prev) => prev.map((s) => (s.classId === deleteClassTarget.id ? { ...s, classId: null } : s)));
+              if (selectedClassId === deleteClassTarget.id) setSelectedClassId(null);
+              setDeleteClassTarget(null);
+              return;
+            }
             await deleteClass(deleteClassTarget.id);
             if (selectedClassId === deleteClassTarget.id) setSelectedClassId(null);
             setDeleteClassTarget(null);
