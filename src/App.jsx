@@ -6,7 +6,6 @@ import {
   COMPANION_PERSONAS,
   STAGE1_CYCLE,
   STAGE2_CYCLE,
-  STAGE3_CYCLE,
   buildCoachSystemPrompt,
   TRANSFER_TEST_SYSTEM_PROMPT,
   COMPREHENSION_SYSTEM_PROMPT,
@@ -3440,7 +3439,9 @@ function LetterConnectWidget({ tiles, onSubmit, disabled = false }) {
 }
 
 
-// STAGE1_CYCLE/STAGE2_CYCLE/STAGE3_CYCLE are imported from ../shared/prompts.js.
+// STAGE1_CYCLE/STAGE2_CYCLE are imported from ../shared/prompts.js. Stage
+// 3's type isn't a cycle at all -- see stage3Type below, assigned by the
+// word's own clueType instead.
 
 // Quiet "coach is typing" cue: replaces the old static "is thinking… 🤔"
 // text. Used both while waiting on the AI response and, briefly, as the
@@ -3487,7 +3488,15 @@ function groupMessagesByExchange(display) {
 function CoachScreen({ passage, targetWord, avatarConfig, onWordResolved, onSkipToReport, onBack, soundOn, onToggleSound, wordIndex, isTransferWord, bilingual }) {
   const stage1Type = STAGE1_CYCLE[wordIndex % STAGE1_CYCLE.length];
   const stage2Type = STAGE2_CYCLE[wordIndex % STAGE2_CYCLE.length];
-  const stage3Type = STAGE3_CYCLE[(wordIndex + 1) % STAGE3_CYCLE.length];
+  // reverse_clue only works when the word's real explanation genuinely
+  // sits elsewhere in the passage -- exactly what an inference clue is.
+  // A definition/example/contrast clue's explanation lives right in the
+  // word's own sentence, so reverse_clue would have nothing good to point
+  // to there (confirmed live: "sturdy," a definition-clue word, produced
+  // 3 real-but-irrelevant sentence options with no genuine explanatory
+  // one among them). tap_select's odd-one-out doesn't have this
+  // constraint, so it's the default for every other clueType.
+  const stage3Type = targetWord.clueType === "inference" ? "reverse_clue" : "tap_select";
   const [history, setHistory] = useState([]);
   const [display, setDisplay] = useState([]);
   const [current, setCurrent] = useState(null);
@@ -4814,11 +4823,23 @@ function getSentenceContaining(text, word) {
   return (found || sentences[0] || text).trim();
 }
 
+// "Which part gave it away?" chunk options: a real clue is almost always
+// a short PHRASE, not an isolated word, so break at real clause
+// boundaries (commas, semicolons, "and"/"but"/"so"/"or") rather than raw
+// whitespace -- confirmed live that whitespace-only splitting turned an
+// 18-word sentence into 18 tiny buttons, several still glued to
+// punctuation ("flyer;", "wants."). Falls back to single words only when
+// the sentence has no natural clause break at all (a short, simple
+// sentence), so there's still more than one option to actually choose
+// between.
 function splitIntoChunks(sentence) {
-  return sentence
-    .split(/\s+/)
-    .map((w) => w.trim())
+  const stripPunct = (s) => s.trim().replace(/^[.,;!?]+|[.,;!?]+$/g, "").trim();
+  const phraseParts = String(sentence)
+    .split(/\s*[,;]\s*|\s+(?:and|but|so|or)\s+/i)
+    .map(stripPunct)
     .filter(Boolean);
+  if (phraseParts.length >= 2) return phraseParts;
+  return String(sentence).split(/\s+/).map(stripPunct).filter(Boolean);
 }
 
 function boldToHtml(text) {

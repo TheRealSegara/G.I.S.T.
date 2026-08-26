@@ -64,12 +64,60 @@ const ODD_ONE_OUT = {
   careful: { belongs: ["cautious", "attentive"], odd: "careless" },
   amazing: { belongs: ["wonderful", "incredible"], odd: "boring" },
   tiny: { belongs: ["small", "little"], odd: "huge" },
+  // Every EXTENDED_WORDS entry gets its own real group too (added after a
+  // live report showed an uncurated word like "skillful" borrowing a
+  // totally unrelated group -- e.g. options ["skillful","sweet","smelly",
+  // "perfumed"], which belongs to "fragrant" -- via the random fallback
+  // below). With these curated, that fallback is only ever reached for a
+  // genuinely novel word from a teacher's own pasted passage.
+  ancient: { belongs: ["old", "aged"], odd: "modern" },
+  narrow: { belongs: ["thin", "tight"], odd: "wide" },
+  massive: { belongs: ["huge", "gigantic"], odd: "tiny" },
+  glistening: { belongs: ["shining", "gleaming"], odd: "dull" },
+  peculiar: { belongs: ["strange", "odd"], odd: "normal" },
+  vast: { belongs: ["huge", "enormous"], odd: "small" },
+  weary: { belongs: ["tired", "exhausted"], odd: "energetic" },
+  cheerful: { belongs: ["happy", "bright"], odd: "gloomy" },
+  mysterious: { belongs: ["secretive", "puzzling"], odd: "obvious" },
+  stubborn: { belongs: ["headstrong", "inflexible"], odd: "flexible" },
+  graceful: { belongs: ["elegant", "smooth"], odd: "clumsy" },
+  clumsy: { belongs: ["awkward", "careless"], odd: "graceful" },
+  eager: { belongs: ["keen", "enthusiastic"], odd: "reluctant" },
+  anxious: { belongs: ["worried", "nervous"], odd: "calm" },
+  furious: { belongs: ["angry", "enraged"], odd: "calm" },
+  gloomy: { belongs: ["dark", "dismal"], odd: "cheerful" },
+  vivid: { belongs: ["bright", "colorful"], odd: "dull" },
+  faint: { belongs: ["weak", "feeble"], odd: "strong" },
+  sturdy: { belongs: ["strong", "solid"], odd: "flimsy" },
+  fragile: { belongs: ["delicate", "breakable"], odd: "sturdy" },
+  reckless: { belongs: ["careless", "rash"], odd: "cautious" },
+  cautious: { belongs: ["careful", "wary"], odd: "reckless" },
+  humble: { belongs: ["modest", "unassuming"], odd: "boastful" },
+  ordinary: { belongs: ["common", "usual"], odd: "extraordinary" },
+  extraordinary: { belongs: ["remarkable", "amazing"], odd: "ordinary" },
+  silent: { belongs: ["quiet", "hushed"], odd: "loud" },
+  deserted: { belongs: ["empty", "abandoned"], odd: "crowded" },
+  crowded: { belongs: ["packed", "busy"], odd: "empty" },
+  spacious: { belongs: ["roomy", "large"], odd: "cramped" },
+  cramped: { belongs: ["tight", "squeezed"], odd: "spacious" },
+  drowsy: { belongs: ["sleepy", "tired"], odd: "alert" },
+  alert: { belongs: ["watchful", "attentive"], odd: "drowsy" },
+  miserable: { belongs: ["unhappy", "sad"], odd: "delighted" },
+  swift: { belongs: ["fast", "quick"], odd: "slow" },
+  sluggish: { belongs: ["slow", "lazy"], odd: "swift" },
+  vibrant: { belongs: ["colorful", "lively"], odd: "dull" },
+  aroma: { belongs: ["scent", "fragrance"], odd: "stench" },
+  dazzling: { belongs: ["brilliant", "sparkling"], odd: "dull" },
+  hospitable: { belongs: ["welcoming", "friendly"], odd: "unfriendly" },
+  content: { belongs: ["satisfied", "peaceful"], odd: "unhappy" },
+  skillful: { belongs: ["skilled", "talented"], odd: "clumsy" },
+  triumphant: { belongs: ["victorious", "proud"], odd: "defeated" },
 };
-// Generic fallback for a word not in ODD_ONE_OUT (an EXTENDED_WORDS entry
-// or a Level Maker word) -- borrows a real curated group's "belongs" pair
-// and "odd" word rather than inventing fake ones, same trade-off the MCQ
-// fallback above already makes ("a self-consistent group, not a real
-// relation for THIS word, but doesn't fail outright").
+// Generic fallback for a word not in ODD_ONE_OUT (a teacher's own novel
+// Level Maker word, never seen before) -- borrows a real curated group's
+// "belongs" pair and "odd" word rather than inventing fake ones, same
+// trade-off the MCQ fallback above already makes ("a self-consistent
+// group, not a real relation for THIS word, but doesn't fail outright").
 const ODD_ONE_OUT_KEYS = Object.keys(ODD_ONE_OUT);
 function oddOneOutFor(word) {
   const lower = word.toLowerCase();
@@ -136,6 +184,15 @@ const EXTENDED_WORDS = {
   swift: { meaning: "Moving very fast", distractors: ["Moving very slowly", "Standing completely still", "Moving very quietly"] },
   sluggish: { meaning: "Slow-moving; lacking energy", distractors: ["Fast and energetic", "Loud and cheerful", "Careful and precise"] },
   vibrant: { meaning: "Full of bright energy", distractors: ["Dull and faded", "Quiet and still", "Old and worn"] },
+  // These 5 join the two newest built-in passages (Night Market, Kite
+  // Festival) -- added here (not CORE_WORDS) since they don't have a fixed
+  // passage-specific hint yet, same as the rest of EXTENDED_WORDS.
+  aroma: { meaning: "A pleasant smell", distractors: ["A loud noise", "A bright color", "A strange taste"] },
+  dazzling: { meaning: "Extremely bright and shiny", distractors: ["Completely dark", "Very dull", "Very quiet"] },
+  hospitable: { meaning: "Warm and welcoming to guests", distractors: ["Rude to guests", "Ignoring visitors", "Afraid of strangers"] },
+  content: { meaning: "Feeling satisfied and at peace", distractors: ["Feeling angry and upset", "Feeling bored and restless", "Feeling worried and unsure"] },
+  skillful: { meaning: "Very good at doing something", distractors: ["Very bad at everything", "New and untrained", "Slow and careless"] },
+  triumphant: { meaning: "Feeling like a proud winner", distractors: ["Feeling like a sad loser", "Feeling completely confused", "Feeling very sleepy"] },
 };
 
 const WORDS = Object.assign({}, CORE_WORDS, EXTENDED_WORDS);
