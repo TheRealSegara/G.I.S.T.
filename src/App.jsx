@@ -1746,6 +1746,7 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, bilingual, 
           <button
             key={a.id}
             onClick={() => { SFX.tap(); onSelect(a.id); }}
+            aria-pressed={isSelected}
             className={`flex flex-col items-center text-center gap-1 p-3 rounded-2xl transition-all ${
               isSelected ? "scale-[1.03]" : "hover:opacity-90"
             }`}
@@ -2122,6 +2123,20 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, bilingual, 
      instead of a placeholder that would need a separate update call) -------- */
   if (mode === "student-signup") {
     const canContinue = authName.trim().length > 0;
+    function handleContinue() {
+      if (!canContinue) return;
+      SFX.click();
+      setStudentId(authName.trim());
+      setPendingSignup(true);
+      setAfterTour("wizard");
+      // Demo Mode is for fast, repeated live pitches -- skip straight to
+      // map/level selection (step 3) instead of making a presenter pick a
+      // coach companion and build an avatar (steps 1-2) every single run.
+      // DEFAULT_AVATAR_CONFIG is already a complete, valid config, so the
+      // account this still creates needs no further changes to be valid.
+      if (demoModeActive) setStep(3);
+      setMode("tour");
+    }
     return (
       <div className="max-w-md mx-auto px-6 py-8 step-in min-h-screen flex flex-col justify-center relative">
         <FloatingDecor density={5} />
@@ -2134,6 +2149,7 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, bilingual, 
           <input
             value={authName}
             onChange={(e) => setAuthName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") handleContinue(); }}
             placeholder="Your full name"
             aria-label="Your full name"
             maxLength={80}
@@ -2147,24 +2163,7 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, bilingual, 
             <BigButton variant="ghost" onClick={() => setMode("student-choice")}>
               <ChevronLeft className="inline w-4 h-4 mr-1" /> Back
             </BigButton>
-            <BigButton
-              onClick={() => {
-                if (!canContinue) return;
-                SFX.click();
-                setStudentId(authName.trim());
-                setPendingSignup(true);
-                setAfterTour("wizard");
-                // Demo Mode is for fast, repeated live pitches -- skip
-                // straight to map/level selection (step 3) instead of
-                // making a presenter pick a coach companion and build an
-                // avatar (steps 1-2) every single run. DEFAULT_AVATAR_CONFIG
-                // is already a complete, valid config, so the account this
-                // still creates needs no further changes to be valid.
-                if (demoModeActive) setStep(3);
-                setMode("tour");
-              }}
-              disabled={!canContinue}
-            >
+            <BigButton onClick={handleContinue} disabled={!canContinue}>
               Continue <ArrowRight className="inline w-4 h-4 ml-1" />
             </BigButton>
           </div>
@@ -2206,6 +2205,7 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, bilingual, 
           <input
             value={authName}
             onChange={(e) => setAuthName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") handleLogin(); }}
             placeholder="Your full name"
             aria-label="Your full name"
             maxLength={80}
@@ -2295,6 +2295,7 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, bilingual, 
                     <button
                       key={h.id}
                       onClick={() => { SFX.tap(); setAvatarConfig((c) => ({ ...c, head: h.id })); }}
+                      aria-pressed={avatarConfig.head === h.id}
                       className={`w-11 h-11 rounded-full flex items-center justify-center text-xl border-3 transition-all ${
                         avatarConfig.head === h.id ? "border-amber-500 scale-110 bg-amber-50" : "border-stone-300 opacity-70"
                       }`}
@@ -2316,6 +2317,7 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, bilingual, 
                       <button
                         key={tone.id}
                         onClick={() => { SFX.tap(); setAvatarConfig((c) => ({ ...c, skinTone: tone.mod })); }}
+                        aria-pressed={avatarConfig.skinTone === tone.mod}
                         className={`w-11 h-11 rounded-full flex items-center justify-center text-lg border-3 transition-all ${
                           avatarConfig.skinTone === tone.mod ? "border-amber-500 scale-110 bg-amber-50" : "border-stone-300 opacity-70"
                         }`}
@@ -2337,6 +2339,8 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, bilingual, 
                   <button
                     key={b.id}
                     onClick={() => { SFX.tap(); setAvatarConfig((c) => ({ ...c, badge: b.id })); }}
+                    aria-pressed={avatarConfig.badge === b.id}
+                    aria-label={b.label}
                     className={`w-12 h-12 sm:w-16 sm:h-16 rounded-full transition-all active:scale-90 ${
                       avatarConfig.badge === b.id ? "scale-110" : "opacity-60 hover:opacity-100"
                     }`}
@@ -2355,6 +2359,7 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, bilingual, 
                   <button
                     key={a.id}
                     onClick={() => { SFX.tap(); setAvatarConfig((c) => ({ ...c, accessory: a.id })); }}
+                    aria-pressed={avatarConfig.accessory === a.id}
                     className={`w-12 h-12 sm:w-16 sm:h-16 rounded-full bg-white flex items-center justify-center text-2xl sm:text-3xl transition-all active:scale-90 ${
                       avatarConfig.accessory === a.id ? "border-amber-500 scale-110 bg-amber-50" : "border-stone-300 opacity-60 hover:opacity-100"
                     }`}
@@ -6771,8 +6776,9 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
       <p className="font-body text-xs text-stone-500 mb-4 relative z-10">Student / Class: {studentId} · {log.length} landmark{log.length === 1 ? "" : "s"} logged this session</p>
 
       <div className="mb-5 relative z-10">
-        <label className="font-display font-700 text-xs uppercase tracking-wide text-stone-500 block mb-1.5">📝 Notes about this session (optional)</label>
+        <label htmlFor="teacher-session-notes" className="font-display font-700 text-xs uppercase tracking-wide text-stone-500 block mb-1.5">📝 Notes about this session (optional)</label>
         <textarea
+          id="teacher-session-notes"
           value={teacherNotes}
           onChange={(e) => setTeacherNotes(e.target.value)}
           placeholder="e.g. right after recess, usually stronger with reading, had a rough morning…"
@@ -6912,8 +6918,9 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
               <BoldText text={previousSession.whatToTry} className="font-body text-sm leading-relaxed text-violet-900 mb-3" />
               {sessionId ? (
                 <div>
-                  <label className="font-display font-700 text-xs uppercase tracking-wide text-violet-700 block mb-1.5">Did it help?</label>
+                  <label htmlFor="follow-up-note" className="font-display font-700 text-xs uppercase tracking-wide text-violet-700 block mb-1.5">Did it help?</label>
                   <textarea
+                    id="follow-up-note"
                     value={followUpNote}
                     onChange={(e) => { setFollowUpNote(e.target.value); setFollowUpSaved(false); }}
                     placeholder="e.g. tried the suggested activity, noticeably more confident with contrast clues now"
@@ -6924,7 +6931,7 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
                     <button
                       onClick={handleSaveFollowUp}
                       disabled={followUpSaving}
-                      className="font-display font-700 text-xs text-white bg-violet-600 rounded-full px-4 py-1.5 disabled:opacity-40"
+                      className="font-display font-700 text-xs text-white bg-violet-600 rounded-full px-4 min-h-11 disabled:opacity-40"
                     >
                       {followUpSaving ? "Saving…" : "Save"}
                     </button>
@@ -7266,7 +7273,7 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
                         >
                           <span className="text-xl shrink-0">{s.passageEmoji || "📖"}</span>
                           <div className="flex-1 min-w-0">
-                            <p className="font-display font-700 text-sm text-indigo-900 truncate">{s.passageTitle}</p>
+                            <p className="font-display font-700 text-sm text-indigo-900 truncate" title={s.passageTitle}>{s.passageTitle}</p>
                             <p className="font-body text-xs text-indigo-600">
                               {new Date(s.finishedAt).toLocaleDateString()} · {s.wordCount} word{s.wordCount === 1 ? "" : "s"}
                               {s.comprehensionCorrect !== null ? ` · comprehension ${s.comprehensionCorrect ? "✓" : "✗"}` : ""}
@@ -7278,7 +7285,7 @@ function TeacherScreen({ studentId, realStudentId = null, sessionId = null, log,
                                 sessions, so it shouldn't be the one place
                                 that goes silent on whether a suggestion
                                 actually got tried. */}
-                            {s.teacherNotes && <p className="font-body text-xs text-violet-600 mt-0.5 truncate">📝 {s.teacherNotes}</p>}
+                            {s.teacherNotes && <p className="font-body text-xs text-violet-600 mt-0.5 truncate" title={s.teacherNotes}>📝 {s.teacherNotes}</p>}
                           </div>
                           <ChevronRight className="w-4 h-4 text-indigo-400 shrink-0" />
                         </button>
@@ -8265,7 +8272,7 @@ function FileBoxScreen({ onBack, onCreateTargetedPassage }) {
               onChange={(e) => handleAssignStudent(s.id, e.target.value)}
               aria-label={`Move ${s.fullName} to a class`}
               title={`Move ${s.fullName} to a class`}
-              className="shrink-0 font-body text-xs text-stone-600 bg-white rounded-full px-2.5 py-2.5 border-2 border-stone-300 focus:outline-none max-w-[110px]"
+              className="shrink-0 font-body text-xs text-stone-600 bg-white rounded-full px-2.5 py-2.5 min-h-11 border-2 border-stone-300 focus:outline-none max-w-[110px]"
             >
               <option value="">Unassigned</option>
               {classes.map((c) => (
@@ -8429,6 +8436,7 @@ function AccessGateScreen({ onUnlocked }) {
         <input
           value={code}
           onChange={(e) => setCode(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter" && code.trim() && !loading) submitCode(code, false); }}
           placeholder="Enter classroom code"
           aria-label="Classroom code"
           autoComplete="off"
