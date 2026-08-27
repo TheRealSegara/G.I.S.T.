@@ -2154,6 +2154,13 @@ function SetupScreen({ onBegin, customPassages, onSaveCustomPassage, bilingual, 
                 setStudentId(authName.trim());
                 setPendingSignup(true);
                 setAfterTour("wizard");
+                // Demo Mode is for fast, repeated live pitches -- skip
+                // straight to map/level selection (step 3) instead of
+                // making a presenter pick a coach companion and build an
+                // avatar (steps 1-2) every single run. DEFAULT_AVATAR_CONFIG
+                // is already a complete, valid config, so the account this
+                // still creates needs no further changes to be valid.
+                if (demoModeActive) setStep(3);
                 setMode("tour");
               }}
               disabled={!canContinue}
